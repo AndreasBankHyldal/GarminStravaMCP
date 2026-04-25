@@ -1,6 +1,6 @@
 # MCP Strava & Garmin Connect Server
 
-An MCP (Model Context Protocol) server that integrates with **Strava** and **Garmin Connect**, letting AI assistants (Claude Desktop, VS Code Copilot) fetch activities, analyze run performance, plan training, and track fitness stats — all through natural conversation.
+An MCP (Model Context Protocol) server that integrates with **Strava** and **Garmin Connect**, letting AI assistants (Claude Desktop, VS Code Copilot) fetch activities, analyze run performance, plan training, and track fitness stats, all through natural conversation.
 
 ## Features
 
