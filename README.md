@@ -1,31 +1,61 @@
 # MCP Strava & Garmin Connect Server
 
-An MCP (Model Context Protocol) server that integrates with **Strava** and **Garmin Connect**, letting your AI assistant fetch activities, analyze run performance, plan training, and track fitness stats.
+An MCP (Model Context Protocol) server that integrates with **Strava** and **Garmin Connect**, letting AI assistants (Claude Desktop, VS Code Copilot) fetch activities, analyze run performance, plan training, and track fitness stats — all through natural conversation.
 
 ## Features
 
 ### 🏃 Strava Integration
-- Fetch recent activities with filters
-- Get detailed activity data (laps, splits, heart rate, pace)
-- View athlete stats (totals, year-to-date)
-- Get time-series data streams (HR, pace, elevation, cadence)
+- Fetch recent activities with date filters
+- Detailed activity data (laps, splits, heart rate, pace)
+- Time-series data streams (HR, pace, elevation, cadence)
+- Athlete aggregate stats (totals, year-to-date, all-time)
+- Create manual activities and update existing ones
 
 ### ⌚ Garmin Connect Integration
-- Fetch activities from Garmin Connect
-- Get fitness stats (VO2max, training load)
-- Heart rate data (resting HR, daily HR)
-- Sleep data and scores
-- Daily step counts
+- Fetch and search activities with flexible filters
+- Personal records scanner (fastest pace, highest HR, longest run, etc.)
+- Fitness stats, VO2max, and training status
+- Heart rate, HRV, sleep, and step data
+- Create, schedule, and delete workouts (syncs to your watch)
+- Training status and recovery insights
 
 ### 📊 Analysis
-- Run performance analysis (pace consistency, HR drift, split analysis)
+- Run performance analysis (pace consistency, HR drift, split analysis, effort classification)
 - Training trends over weeks/months (weekly mileage, pace trends)
 - Compare Strava vs Garmin data for the same activity
+- Pre-computed effort levels and HR zone classification on all activities
 
 ### 📋 Training Plans
-- Create multi-week training plans
-- Track planned workouts (easy run, tempo, intervals, long run, etc.)
+- Create multi-week training plans stored locally (SQLite)
+- Track planned workouts (easy run, tempo, intervals, long run, rest)
 - Check plan compliance against actual activities
+- Push key workouts to Garmin Connect
+
+### 🧠 Smart Formatting
+All activity data includes enriched context to help AI assistants reason accurately:
+- **Temporal context**: day-of-week, human-readable dates, "days ago" counts
+- **Effort classification**: easy / moderate / tempo / threshold / interval
+- **HR zone labels**: Zone 1–5 with descriptions
+- **Pre-computed metrics**: pace per km, formatted durations, elevation data
+
+### 📚 MCP Resources
+Always-available context that AI assistants can reference without tool calls:
+
+| Resource | URI | Description |
+|----------|-----|-------------|
+| Athlete Profile | `strava://athlete/profile` | Strava totals (recent, YTD, all-time), HR zone reference, unit preferences |
+| Garmin Health | `garmin://health/today` | Today's heart rate, sleep, and step data from Garmin |
+
+### 💬 MCP Prompts
+Pre-built multi-step analysis workflows — use these as conversation starters:
+
+| Prompt | Description |
+|--------|-------------|
+| `analyze-recent-training` | Comprehensive multi-week training analysis with trends and recommendations |
+| `activity-deep-dive` | Deep dive into a specific activity: splits, HR analysis, pacing strategy |
+| `training-readiness-check` | Today's readiness check based on recent load, sleep, and recovery |
+| `compare-recent-runs` | Side-by-side comparison of recent runs to spot trends |
+| `race-plan` | Generate a structured training plan for an upcoming race |
 
 ## Setup
 
@@ -47,7 +77,7 @@ cp .env.example .env
 
 #### Strava Setup
 1. Go to [Strava API Settings](https://www.strava.com/settings/api) and create an application
-2. Set the "Authorization Callback Domain" to `localhost`
+2. Set the **Authorization Callback Domain** to `localhost`
 3. Copy your **Client ID** and **Client Secret** into `.env`
 4. Run the one-time OAuth flow:
 
@@ -55,17 +85,17 @@ cp .env.example .env
 npm run strava-auth
 ```
 
-This opens a browser for authorization and saves your tokens automatically.
+This opens a browser for authorization and saves your tokens to `.strava-tokens.json`. Tokens auto-refresh on subsequent use.
 
 #### Garmin Connect Setup
-Add your Garmin Connect username and password to `.env`:
+Add your Garmin Connect credentials to `.env`:
 
 ```
 GARMIN_USERNAME=your.email@example.com
 GARMIN_PASSWORD=your_password
 ```
 
-> ⚠️ Garmin uses an unofficial API. MFA may require manual intervention. Session tokens are cached to minimize logins.
+> ⚠️ Garmin uses an unofficial API (`@gooin/garmin-connect`). MFA may require manual intervention. Session tokens are cached in `.garmin-tokens/` to minimize logins.
 
 ### 3. Configure your MCP client
 
@@ -78,21 +108,17 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "strava-garmin": {
       "command": "node",
-      "args": ["/FULL/PATH/TO/mcpStravaGarmin/dist/index.js"],
-      "env": {
-        "STRAVA_CLIENT_ID": "your_client_id",
-        "STRAVA_CLIENT_SECRET": "your_client_secret",
-        "GARMIN_USERNAME": "your_email",
-        "GARMIN_PASSWORD": "your_password"
-      }
+      "args": ["/FULL/PATH/TO/mcpStravaGarmin/dist/index.js"]
     }
   }
 }
 ```
 
+Credentials are read from the `.env` file in the project directory — no need to duplicate them in the config.
+
 #### VS Code (Copilot)
 
-Add to your VS Code settings or `.vscode/mcp.json`:
+Add to your `.vscode/mcp.json`:
 
 ```json
 {
@@ -107,25 +133,52 @@ Add to your VS Code settings or `.vscode/mcp.json`:
 
 ## Available Tools
 
+### Strava
+
 | Tool | Description |
 |------|-------------|
-| `strava_get_activities` | Fetch recent Strava activities |
-| `strava_get_activity_details` | Get detailed data for a Strava activity |
-| `strava_get_athlete_stats` | Get athlete totals and stats |
-| `strava_get_activity_streams` | Get time-series data (HR, pace, etc.) |
+| `strava_get_activities` | Fetch recent Strava activities with optional date filters |
+| `strava_get_activity_details` | Get detailed data for a Strava activity (laps, splits) |
+| `strava_get_athlete_stats` | Get aggregate athlete stats (totals, year-to-date) |
+| `strava_get_activity_streams` | Get time-series data (HR, pace, elevation, cadence) |
+| `strava_create_activity` | Create a manual activity on Strava |
+| `strava_update_activity` | Update an existing Strava activity |
+
+### Garmin Connect
+
+| Tool | Description |
+|------|-------------|
 | `garmin_get_activities` | Fetch recent Garmin activities |
 | `garmin_get_activity_details` | Get detailed Garmin activity data |
+| `garmin_get_personal_records` | Scan up to 500 activities for all-time bests |
+| `garmin_search_activities` | Search activities with flexible filters (distance, HR, date, pace) |
 | `garmin_get_fitness_stats` | Get fitness profile and stats |
-| `garmin_get_heart_rate` | Get heart rate data for a date |
-| `garmin_get_sleep` | Get sleep data for a date |
-| `garmin_get_steps` | Get step count for a date |
-| `analyze_run_performance` | Deep analysis of a run (splits, HR drift) |
-| `compare_activities` | Compare Strava vs Garmin data |
-| `get_training_trends` | Weekly training volume and trends |
-| `create_training_plan` | Create a training plan with workouts |
-| `get_training_plan` | View a training plan |
-| `update_training_plan` | Modify a training plan |
-| `check_plan_compliance` | Check adherence to training plan |
+| `garmin_get_training_status` | Get VO2max, training load, recovery time |
+| `garmin_get_heart_rate` | Get heart rate data for a specific date |
+| `garmin_get_hrv` | Get Heart Rate Variability data |
+| `garmin_get_sleep` | Get sleep data and quality scores |
+| `garmin_get_steps` | Get daily step count |
+| `garmin_get_workouts` | Get planned workouts from Garmin |
+| `garmin_add_running_workout` | Create a running workout (syncs to watch) |
+| `garmin_schedule_workout` | Schedule a workout for a specific date |
+| `garmin_delete_workout` | Delete a workout from Garmin |
+
+### Analysis
+
+| Tool | Description |
+|------|-------------|
+| `analyze_run_performance` | Deep analysis of a run: pace consistency, HR drift, splits |
+| `compare_activities` | Compare Strava vs Garmin data for the same activity |
+| `get_training_trends` | Weekly mileage, pace, and HR trends |
+
+### Training Plans
+
+| Tool | Description |
+|------|-------------|
+| `create_training_plan` | Create a multi-week training plan |
+| `get_training_plan` | View a training plan and its workouts |
+| `update_training_plan` | Modify a training plan or its workouts |
+| `check_plan_compliance` | Check adherence to training plan vs actual activities |
 
 ## Example Prompts
 
@@ -135,10 +188,36 @@ Once connected, try asking your AI assistant:
 - *"Analyze my most recent run — how consistent was my pacing?"*
 - *"What's my weekly mileage trend over the last 8 weeks?"*
 - *"Compare my last run between Strava and Garmin"*
+- *"What's my fastest 5K ever?"*
+- *"Show me all runs over 15km this year"*
 - *"Create a 4-week half marathon training plan starting next Monday"*
+- *"Am I ready for a hard workout today?"*
 - *"How well am I following my training plan?"*
 - *"What was my sleep quality last night?"*
-- *"What's my current VO2max and resting heart rate?"*
+- *"Create a tempo run workout on Garmin for tomorrow"*
+
+## Architecture
+
+```
+src/
+├── index.ts              # Entry point, MCP server setup, resources, prompts
+├── config.ts             # Manual .env parser (avoids dotenv stdout issues)
+├── utils.ts              # Shared formatting: enrichDate, pace, duration, zones
+├── strava/
+│   ├── auth.ts           # OAuth token management with auto-refresh
+│   ├── auth-flow.ts      # One-time browser OAuth flow (npm run strava-auth)
+│   ├── client.ts         # Strava API client
+│   └── tools.ts          # Strava MCP tool definitions
+├── garmin/
+│   ├── client.ts         # Garmin Connect API wrapper (@gooin/garmin-connect)
+│   └── tools.ts          # Garmin MCP tool definitions
+├── analysis/
+│   └── tools.ts          # Run analysis and comparison tools
+├── planning/
+│   └── tools.ts          # Training plan CRUD tools
+└── db/
+    └── database.ts       # SQLite setup and migrations
+```
 
 ## Development
 
@@ -151,12 +230,32 @@ npm run build
 
 # Run built version
 npm start
+
+# Re-authenticate Strava
+npm run strava-auth
 ```
+
+## Technical Notes
+
+- **MCP transport**: stdio (newline-delimited JSON). All non-MCP stdout is redirected to stderr to prevent protocol corruption.
+- **Strava OAuth**: Tokens saved to `.strava-tokens.json` and auto-refreshed. The `.env` file holds initial/fallback tokens only.
+- **Garmin tokens**: Cached in `.garmin-tokens/` directory to avoid repeated logins.
+- **DB path**: Uses absolute paths to work correctly when launched from Claude Desktop (which has a different CWD than the project root).
 
 ## Rate Limits
 
-- **Strava**: 100 requests per 15 minutes, 1000 per day
-- **Garmin**: Unofficial API — be conservative with requests
+- **Strava**: 100 requests per 15 minutes, 1,000 per day
+- **Garmin**: Unofficial API — be conservative with request frequency
+
+## Security
+
+The `.gitignore` excludes sensitive files:
+- `.env` — API credentials
+- `.strava-tokens.json` — OAuth access/refresh tokens
+- `.garmin-tokens/` — Garmin session tokens
+- `data/` — Local SQLite database
+
+Never commit these files to version control.
 
 ## License
 
