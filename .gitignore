@@ -2,4 +2,6 @@ node_modules/
 dist/
 data/*.db
 .env
+.strava-tokens.json
+.garmin-tokens/
 *.log

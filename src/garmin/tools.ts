@@ -61,6 +61,170 @@ export function registerGarminTools(server: McpServer): void {
   );
 
   server.tool(
+    "garmin_get_personal_records",
+    "Scan all Garmin activities to find personal records: highest HR, fastest pace, longest run, most elevation, etc. Can scan up to 500 activities.",
+    {
+      max_activities: z.number().min(10).max(500).default(200).describe("Max activities to scan"),
+      activity_type: z.string().optional().describe("Filter by type (e.g. 'running', 'cycling')"),
+    },
+    async ({ max_activities, activity_type }) => {
+      try {
+        let activities = await garminClient.getAllActivities(max_activities);
+
+        if (activity_type) {
+          activities = activities.filter(
+            (a) => a.activityType?.typeKey?.toLowerCase().includes(activity_type.toLowerCase())
+          );
+        }
+
+        if (activities.length === 0) {
+          return {
+            content: [{ type: "text", text: "No activities found matching the criteria." }],
+          };
+        }
+
+        const withHR = activities.filter((a) => a.maxHR > 0);
+        const withDist = activities.filter((a) => a.distance > 0);
+        const withSpeed = activities.filter((a) => a.averageSpeed > 0);
+        const withElev = activities.filter((a) => a.elevationGain > 0);
+        const withCal = activities.filter((a) => a.calories > 0);
+
+        const highest = (arr: typeof activities, key: keyof typeof activities[0]) => {
+          if (arr.length === 0) return null;
+          const best = arr.reduce((max, a) => ((a[key] as number) > (max[key] as number) ? a : max));
+          return { value: best[key], activity: formatGarminActivity(best) };
+        };
+
+        const lowest = (arr: typeof activities, key: keyof typeof activities[0]) => {
+          if (arr.length === 0) return null;
+          const best = arr.reduce((min, a) => ((a[key] as number) < (min[key] as number) ? a : min));
+          return { value: best[key], activity: formatGarminActivity(best) };
+        };
+
+        // Fastest pace = highest average speed
+        const fastestPace = withSpeed.length > 0
+          ? (() => {
+              const best = withSpeed.reduce((max, a) => a.averageSpeed > max.averageSpeed ? a : max);
+              const secPerKm = 1000 / best.averageSpeed;
+              const mins = Math.floor(secPerKm / 60);
+              const secs = Math.round(secPerKm % 60);
+              return { pace_per_km: `${mins}:${secs.toString().padStart(2, "0")}`, activity: formatGarminActivity(best) };
+            })()
+          : null;
+
+        const records = {
+          activities_scanned: activities.length,
+          highest_heart_rate: highest(withHR, "maxHR"),
+          highest_avg_heart_rate: highest(withHR, "averageHR"),
+          lowest_avg_heart_rate: withHR.length > 0
+            ? (() => {
+                const best = withHR.reduce((min, a) => a.averageHR < min.averageHR ? a : min);
+                return { value: best.averageHR, activity: formatGarminActivity(best) };
+              })()
+            : null,
+          fastest_pace: fastestPace,
+          longest_distance: highest(withDist, "distance"),
+          longest_duration: highest(activities.filter((a) => a.duration > 0), "duration"),
+          most_elevation: highest(withElev, "elevationGain"),
+          most_calories: highest(withCal, "calories"),
+          highest_vo2max: highest(activities.filter((a) => a.vO2MaxValue && a.vO2MaxValue > 0), "vO2MaxValue"),
+        };
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(records, null, 2) }],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_search_activities",
+    "Search through all Garmin activities with flexible filters. Useful for finding specific activities or answering questions like 'my fastest 5K' or 'runs over 15km'.",
+    {
+      max_activities: z.number().min(10).max(500).default(200).describe("Max activities to scan"),
+      activity_type: z.string().optional().describe("Filter by type (e.g. 'running')"),
+      min_distance_km: z.number().optional().describe("Minimum distance in km"),
+      max_distance_km: z.number().optional().describe("Maximum distance in km"),
+      min_hr: z.number().optional().describe("Minimum average heart rate"),
+      max_hr: z.number().optional().describe("Maximum average heart rate"),
+      after: z.string().optional().describe("Only activities after this date (ISO 8601)"),
+      before: z.string().optional().describe("Only activities before this date (ISO 8601)"),
+      sort_by: z.enum(["date", "distance", "duration", "pace", "heartrate", "elevation"]).default("date").describe("Sort results by"),
+      sort_order: z.enum(["asc", "desc"]).default("desc").describe("Sort order"),
+      limit: z.number().min(1).max(50).default(10).describe("Max results to return"),
+    },
+    async ({ max_activities, activity_type, min_distance_km, max_distance_km, min_hr, max_hr, after, before, sort_by, sort_order, limit }) => {
+      try {
+        let activities = await garminClient.getAllActivities(max_activities);
+
+        if (activity_type) {
+          activities = activities.filter(
+            (a) => a.activityType?.typeKey?.toLowerCase().includes(activity_type.toLowerCase())
+          );
+        }
+        if (min_distance_km) {
+          activities = activities.filter((a) => a.distance / 1000 >= min_distance_km);
+        }
+        if (max_distance_km) {
+          activities = activities.filter((a) => a.distance / 1000 <= max_distance_km);
+        }
+        if (min_hr) {
+          activities = activities.filter((a) => a.averageHR >= min_hr);
+        }
+        if (max_hr) {
+          activities = activities.filter((a) => a.averageHR <= max_hr);
+        }
+        if (after) {
+          const afterDate = new Date(after);
+          activities = activities.filter((a) => new Date(a.startTimeLocal) >= afterDate);
+        }
+        if (before) {
+          const beforeDate = new Date(before);
+          activities = activities.filter((a) => new Date(a.startTimeLocal) <= beforeDate);
+        }
+
+        // Sort
+        const sortFns: Record<string, (a: any, b: any) => number> = {
+          date: (a, b) => new Date(a.startTimeLocal).getTime() - new Date(b.startTimeLocal).getTime(),
+          distance: (a, b) => a.distance - b.distance,
+          duration: (a, b) => a.duration - b.duration,
+          pace: (a, b) => a.averageSpeed - b.averageSpeed,
+          heartrate: (a, b) => (a.averageHR || 0) - (b.averageHR || 0),
+          elevation: (a, b) => (a.elevationGain || 0) - (b.elevationGain || 0),
+        };
+
+        activities.sort(sortFns[sort_by] ?? sortFns.date);
+        if (sort_order === "desc") activities.reverse();
+
+        const results = activities.slice(0, limit).map(formatGarminActivity);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                { total_matching: activities.length, showing: results.length, results },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
     "garmin_get_activity_details",
     "Get detailed data for a specific Garmin activity.",
     {
@@ -176,6 +340,165 @@ export function registerGarminTools(server: McpServer): void {
         const steps = await garminClient.getSteps(d);
         return {
           content: [{ type: "text", text: JSON.stringify({ date: date ?? "today", steps }, null, 2) }],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_get_workouts",
+    "Get planned workouts from Garmin Connect.",
+    {
+      count: z.number().min(1).max(50).default(10).describe("Number of workouts to fetch"),
+    },
+    async ({ count }) => {
+      try {
+        const workouts = await garminClient.getWorkouts(0, count);
+        return {
+          content: [{ type: "text", text: JSON.stringify(workouts, null, 2) }],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_add_running_workout",
+    "Create a running workout on Garmin Connect. This will appear in the Garmin Connect app and can sync to your watch.",
+    {
+      name: z.string().describe("Workout name (e.g. 'Easy 5K Run')"),
+      distance_km: z.number().describe("Target distance in kilometers"),
+      description: z.string().default("").describe("Workout description/notes"),
+    },
+    async ({ name, distance_km, description }) => {
+      try {
+        const meters = Math.round(distance_km * 1000);
+        const result = await garminClient.addRunningWorkout(name, meters, description);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  success: true,
+                  message: `Workout "${name}" (${distance_km}km) created on Garmin Connect! It will appear in your Garmin Connect app and can be sent to your watch.`,
+                  workout: result,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_delete_workout",
+    "Delete a workout from Garmin Connect.",
+    {
+      workout_id: z.string().describe("The Garmin workout ID to delete"),
+    },
+    async ({ workout_id }) => {
+      try {
+        await garminClient.deleteWorkout(workout_id);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ success: true, message: `Workout ${workout_id} deleted.` }, null, 2),
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_get_training_status",
+    "Get Garmin training status: VO2max, training load, recovery time, training effect.",
+    {
+      date: z.string().optional().describe("Date in ISO 8601 format (defaults to today)"),
+    },
+    async ({ date }) => {
+      try {
+        const d = date ? new Date(date) : undefined;
+        const status = await garminClient.getTrainingStatus(d);
+        return {
+          content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_get_hrv",
+    "Get Heart Rate Variability (HRV) data from Garmin for a specific date.",
+    {
+      date: z.string().optional().describe("Date in ISO 8601 format (defaults to today)"),
+    },
+    async ({ date }) => {
+      try {
+        const d = date ? new Date(date) : undefined;
+        const hrv = await garminClient.getHRVData(d);
+        return {
+          content: [{ type: "text", text: JSON.stringify(hrv, null, 2) }],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_schedule_workout",
+    "Schedule an existing Garmin workout for a specific date. The workout will appear on your calendar and sync to your watch.",
+    {
+      workout_id: z.string().describe("The Garmin workout ID to schedule"),
+      date: z.string().describe("Date to schedule the workout (ISO 8601)"),
+    },
+    async ({ workout_id, date }) => {
+      try {
+        const result = await garminClient.scheduleWorkout(workout_id, new Date(date));
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                success: true,
+                message: `Workout ${workout_id} scheduled for ${date}. It will sync to your Garmin watch!`,
+                result,
+              }, null, 2),
+            },
+          ],
         };
       } catch (err: any) {
         return {

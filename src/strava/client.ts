@@ -122,3 +122,47 @@ export async function getActivityStreams(
     { keys: keys.join(","), key_type: "time" }
   );
 }
+
+export async function createManualActivity(params: {
+  name: string;
+  sport_type: string;
+  start_date_local: string;
+  elapsed_time: number;
+  distance?: number;
+  description?: string;
+}): Promise<StravaActivity> {
+  const token = await getAccessToken();
+  const resp = await fetch(`${BASE_URL}/activities`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Strava API error ${resp.status}: ${await resp.text()}`);
+  }
+  return resp.json() as Promise<StravaActivity>;
+}
+
+export async function updateActivity(
+  id: number,
+  params: { name?: string; description?: string; sport_type?: string }
+): Promise<StravaActivity> {
+  const token = await getAccessToken();
+  const resp = await fetch(`${BASE_URL}/activities/${id}`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Strava API error ${resp.status}: ${await resp.text()}`);
+  }
+  return resp.json() as Promise<StravaActivity>;
+}

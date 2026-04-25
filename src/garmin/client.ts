@@ -1,15 +1,17 @@
-import { GarminConnect } from "garmin-connect";
+import GarminConnectModule from "@gooin/garmin-connect";
 import { config } from "../config.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const GarminConnect = (GarminConnectModule as any).GarminConnect ?? GarminConnectModule;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN_DIR = path.resolve(__dirname, "..", "..", ".garmin-tokens");
 
-let client: InstanceType<typeof GarminConnect> | null = null;
+let client: any = null;
 
-export async function getGarminClient(): Promise<InstanceType<typeof GarminConnect>> {
+export async function getGarminClient(): Promise<any> {
   if (client) return client;
 
   if (!config.garmin.username || !config.garmin.password) {
@@ -26,7 +28,7 @@ export async function getGarminClient(): Promise<InstanceType<typeof GarminConne
   // Try to load cached session tokens
   if (fs.existsSync(TOKEN_DIR)) {
     try {
-      client.loadTokenByFile(TOKEN_DIR);
+      await client.loadTokenByFile(TOKEN_DIR);
     } catch {
       // Token expired or invalid, will re-login
     }
@@ -38,7 +40,7 @@ export async function getGarminClient(): Promise<InstanceType<typeof GarminConne
     if (!fs.existsSync(TOKEN_DIR)) {
       fs.mkdirSync(TOKEN_DIR, { recursive: true });
     }
-    client.exportTokenToFile(TOKEN_DIR);
+    await client.exportTokenToFile(TOKEN_DIR);
   } catch (err: any) {
     client = null;
     throw new Error(`Garmin login failed: ${err.message}`);
@@ -71,6 +73,23 @@ export async function getActivities(start = 0, limit = 20): Promise<GarminActivi
   return gc.getActivities(start, limit) as Promise<GarminActivity[]>;
 }
 
+export async function countActivities(): Promise<number> {
+  const gc = await getGarminClient();
+  const result = await gc.countActivities();
+  return (result as any)?.totalActivities ?? (result as any)?.count ?? 0;
+}
+
+export async function getAllActivities(maxActivities = 500): Promise<GarminActivity[]> {
+  const batchSize = 100;
+  const all: GarminActivity[] = [];
+  for (let start = 0; start < maxActivities; start += batchSize) {
+    const batch = await getActivities(start, Math.min(batchSize, maxActivities - start));
+    all.push(...batch);
+    if (batch.length < batchSize) break;
+  }
+  return all;
+}
+
 export async function getActivityDetails(activityId: number): Promise<GarminActivity> {
   const gc = await getGarminClient();
   return gc.getActivity({ activityId }) as Promise<GarminActivity>;
@@ -99,4 +118,48 @@ export async function getUserProfile(): Promise<any> {
 export async function getUserSettings(): Promise<any> {
   const gc = await getGarminClient();
   return gc.getUserSettings();
+}
+
+export async function getWorkouts(start = 0, limit = 20): Promise<any[]> {
+  const gc = await getGarminClient();
+  return gc.getWorkouts(start, limit);
+}
+
+export async function getWorkoutDetail(workoutId: string): Promise<any> {
+  const gc = await getGarminClient();
+  return gc.getWorkoutDetail({ workoutId });
+}
+
+export async function addRunningWorkout(
+  name: string,
+  meters: number,
+  description: string
+): Promise<any> {
+  const gc = await getGarminClient();
+  return gc.addRunningWorkout(name, meters, description);
+}
+
+export async function deleteWorkout(workoutId: string): Promise<any> {
+  const gc = await getGarminClient();
+  return gc.deleteWorkout({ workoutId });
+}
+
+export async function scheduleWorkout(workoutId: string, date?: Date): Promise<any> {
+  const gc = await getGarminClient();
+  return gc.scheduleWorkout({ workoutId }, date);
+}
+
+export async function getTrainingStatus(date?: Date): Promise<any> {
+  const gc = await getGarminClient();
+  return gc.getTrainingStatus(date);
+}
+
+export async function getHRVData(date?: Date): Promise<any> {
+  const gc = await getGarminClient();
+  return gc.getHRVData(date);
+}
+
+export async function getPersonalInfo(): Promise<any> {
+  const gc = await getGarminClient();
+  return gc.getPersonalInfo();
 }

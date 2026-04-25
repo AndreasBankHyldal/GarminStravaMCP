@@ -192,4 +192,94 @@ export function registerStravaTools(server: McpServer): void {
       }
     }
   );
+
+  server.tool(
+    "strava_create_activity",
+    "Create a manual activity on Strava (e.g. log a run that wasn't GPS-tracked).",
+    {
+      name: z.string().describe("Activity name"),
+      sport_type: z.enum(["Run", "Trail Run", "Walk", "Hike", "Ride", "Swim", "Workout"]).default("Run").describe("Sport type"),
+      start_date: z.string().describe("Start date/time in ISO 8601 format"),
+      elapsed_time_minutes: z.number().describe("Total elapsed time in minutes"),
+      distance_km: z.number().optional().describe("Distance in kilometers"),
+      description: z.string().optional().describe("Activity description"),
+    },
+    async ({ name, sport_type, start_date, elapsed_time_minutes, distance_km, description }) => {
+      try {
+        const activity = await stravaClient.createManualActivity({
+          name,
+          sport_type,
+          start_date_local: start_date,
+          elapsed_time: Math.round(elapsed_time_minutes * 60),
+          distance: distance_km ? distance_km * 1000 : undefined,
+          description,
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  success: true,
+                  message: `Activity "${name}" created on Strava!`,
+                  activity_id: activity.id,
+                  activity: formatActivity(activity),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "strava_update_activity",
+    "Update an existing Strava activity (name, description, or sport type).",
+    {
+      activity_id: z.number().describe("Strava activity ID to update"),
+      name: z.string().optional().describe("New activity name"),
+      description: z.string().optional().describe("New description"),
+      sport_type: z.string().optional().describe("New sport type"),
+    },
+    async ({ activity_id, name, description, sport_type }) => {
+      try {
+        const params: any = {};
+        if (name) params.name = name;
+        if (description) params.description = description;
+        if (sport_type) params.sport_type = sport_type;
+
+        const activity = await stravaClient.updateActivity(activity_id, params);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  success: true,
+                  message: `Activity ${activity_id} updated on Strava.`,
+                  activity: formatActivity(activity),
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
 }
