@@ -1,35 +1,24 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as garminClient from "./client.js";
-
-function speedToPacePerKm(metersPerSecond: number): string {
-  if (!metersPerSecond || metersPerSecond <= 0) return "N/A";
-  const secondsPerKm = 1000 / metersPerSecond;
-  const mins = Math.floor(secondsPerKm / 60);
-  const secs = Math.round(secondsPerKm % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.round(seconds % 60);
-  return h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
-}
+import { enrichDate, speedToPacePerKm, formatDuration, classifyEffort, classifyHRZone } from "../utils.js";
 
 function formatGarminActivity(a: garminClient.GarminActivity) {
+  const paceSecPerKm = a.averageSpeed > 0 ? 1000 / a.averageSpeed : 0;
   return {
     id: a.activityId,
     name: a.activityName,
     type: a.activityType?.typeKey ?? "unknown",
-    date: a.startTimeLocal,
-    distance_km: a.distance ? (a.distance / 1000).toFixed(2) : "0",
+    date: enrichDate(a.startTimeLocal),
+    distance_km: a.distance ? +(a.distance / 1000).toFixed(2) : 0,
     duration: formatDuration(a.duration ?? 0),
     moving_duration: formatDuration(a.movingDuration ?? 0),
     pace_per_km: speedToPacePerKm(a.averageSpeed),
+    effort_level: paceSecPerKm > 0 ? classifyEffort(paceSecPerKm) : null,
     elevation_gain_m: a.elevationGain ?? 0,
     avg_heartrate: a.averageHR ?? null,
     max_heartrate: a.maxHR ?? null,
+    hr_zone: a.averageHR ? classifyHRZone(a.averageHR) : null,
     calories: a.calories ?? null,
     cadence_spm: a.averageRunningCadenceInStepsPerMinute ?? null,
     vo2max: a.vO2MaxValue ?? null,

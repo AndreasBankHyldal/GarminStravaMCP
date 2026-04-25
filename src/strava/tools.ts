@@ -1,34 +1,24 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as stravaClient from "./client.js";
-
-function speedToPacePerKm(metersPerSecond: number): string {
-  if (metersPerSecond <= 0) return "N/A";
-  const secondsPerKm = 1000 / metersPerSecond;
-  const mins = Math.floor(secondsPerKm / 60);
-  const secs = Math.round(secondsPerKm % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.round(seconds % 60);
-  return h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
-}
+import { enrichDate, speedToPacePerKm, formatDuration, classifyEffort, classifyHRZone } from "../utils.js";
 
 function formatActivity(a: stravaClient.StravaActivity) {
+  const paceSecPerKm = a.average_speed > 0 ? 1000 / a.average_speed : 0;
   return {
     id: a.id,
     name: a.name,
     type: a.sport_type || a.type,
-    date: a.start_date_local,
-    distance_km: (a.distance / 1000).toFixed(2),
+    date: enrichDate(a.start_date_local),
+    distance_km: +(a.distance / 1000).toFixed(2),
     duration: formatDuration(a.moving_time),
+    moving_time_seconds: a.moving_time,
     pace_per_km: speedToPacePerKm(a.average_speed),
+    effort_level: paceSecPerKm > 0 ? classifyEffort(paceSecPerKm) : null,
     elevation_gain_m: a.total_elevation_gain,
     avg_heartrate: a.average_heartrate ?? null,
     max_heartrate: a.max_heartrate ?? null,
+    hr_zone: a.average_heartrate ? classifyHRZone(a.average_heartrate) : null,
     calories: a.calories ?? null,
   };
 }

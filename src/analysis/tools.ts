@@ -3,14 +3,7 @@ import { z } from "zod";
 import { getDb } from "../db/database.js";
 import * as stravaClient from "../strava/client.js";
 import * as garminClient from "../garmin/client.js";
-
-function speedToPacePerKm(metersPerSecond: number): string {
-  if (!metersPerSecond || metersPerSecond <= 0) return "N/A";
-  const secondsPerKm = 1000 / metersPerSecond;
-  const mins = Math.floor(secondsPerKm / 60);
-  const secs = Math.round(secondsPerKm % 60);
-  return `${mins}:${secs.toString().padStart(2, "0")}`;
-}
+import { speedToPacePerKm, enrichDate, formatDuration } from "../utils.js";
 
 export function registerAnalysisTools(server: McpServer): void {
   server.tool(
@@ -329,9 +322,3 @@ export function registerAnalysisTools(server: McpServer): void {
   );
 }
 
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.round(seconds % 60);
-  return h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
-}
