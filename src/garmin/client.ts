@@ -10,6 +10,43 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TOKEN_DIR = path.resolve(__dirname, "..", "..", ".garmin-tokens");
 
 let client: any = null;
+let lastLoginAttempt = 0;
+const LOGIN_COOLDOWN_MS = 60_000; // Wait at least 60s between login attempts
+
+async function tryLoadTokens(gc: any): Promise<boolean> {
+  if (!fs.existsSync(TOKEN_DIR)) return false;
+  try {
+    await gc.loadTokenByFile(TOKEN_DIR);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function saveTokens(gc: any): Promise<void> {
+  try {
+    if (!fs.existsSync(TOKEN_DIR)) {
+      fs.mkdirSync(TOKEN_DIR, { recursive: true });
+    }
+    await gc.exportTokenToFile(TOKEN_DIR);
+  } catch {
+    // Non-critical — we'll just re-login next time
+  }
+}
+
+async function performLogin(gc: any): Promise<void> {
+  const now = Date.now();
+  if (now - lastLoginAttempt < LOGIN_COOLDOWN_MS) {
+    const waitSec = Math.ceil((LOGIN_COOLDOWN_MS - (now - lastLoginAttempt)) / 1000);
+    throw new Error(
+      `Garmin login rate-limited. Wait ${waitSec}s before retrying. ` +
+      `Garmin blocks repeated login attempts — this is a cooldown to protect your account.`
+    );
+  }
+  lastLoginAttempt = now;
+  await gc.login();
+  await saveTokens(gc);
+}
 
 export async function getGarminClient(): Promise<any> {
   if (client) return client;
@@ -20,33 +57,51 @@ export async function getGarminClient(): Promise<any> {
     );
   }
 
-  client = new GarminConnect({
+  const gc = new GarminConnect({
     username: config.garmin.username,
     password: config.garmin.password,
   });
 
-  // Try to load cached session tokens
-  if (fs.existsSync(TOKEN_DIR)) {
+  // Try cached tokens first to avoid unnecessary logins
+  const tokensLoaded = await tryLoadTokens(gc);
+
+  if (!tokensLoaded) {
+    // No cached tokens — must do a fresh login
     try {
-      await client.loadTokenByFile(TOKEN_DIR);
-    } catch {
-      // Token expired or invalid, will re-login
+      await performLogin(gc);
+    } catch (err: any) {
+      throw new Error(`Garmin login failed: ${err.message}`);
     }
   }
 
-  try {
-    await client.login();
-    // Cache the session tokens
-    if (!fs.existsSync(TOKEN_DIR)) {
-      fs.mkdirSync(TOKEN_DIR, { recursive: true });
-    }
-    await client.exportTokenToFile(TOKEN_DIR);
-  } catch (err: any) {
-    client = null;
-    throw new Error(`Garmin login failed: ${err.message}`);
-  }
-
+  client = gc;
   return client;
+}
+
+/** Wrap a Garmin API call with automatic re-auth on 403 */
+async function withRetry<T>(fn: (gc: any) => Promise<T>): Promise<T> {
+  const gc = await getGarminClient();
+  try {
+    return await fn(gc);
+  } catch (err: any) {
+    const status = err?.response?.status ?? err?.status;
+    const msg = err?.message ?? "";
+    if (status === 403 || status === 401 || msg.includes("403") || msg.includes("Forbidden")) {
+      // Token expired — clear client and re-login
+      console.error("Garmin session expired, re-authenticating...");
+      client = null;
+      try {
+        const freshGc = await getGarminClient();
+        await performLogin(freshGc);
+        client = freshGc;
+        return await fn(freshGc);
+      } catch (retryErr: any) {
+        client = null;
+        throw new Error(`Garmin re-auth failed: ${retryErr.message}`);
+      }
+    }
+    throw err;
+  }
 }
 
 export interface GarminActivity {
@@ -69,14 +124,14 @@ export interface GarminActivity {
 }
 
 export async function getActivities(start = 0, limit = 20): Promise<GarminActivity[]> {
-  const gc = await getGarminClient();
-  return gc.getActivities(start, limit) as Promise<GarminActivity[]>;
+  return withRetry(gc => gc.getActivities(start, limit));
 }
 
 export async function countActivities(): Promise<number> {
-  const gc = await getGarminClient();
-  const result = await gc.countActivities();
-  return (result as any)?.totalActivities ?? (result as any)?.count ?? 0;
+  return withRetry(async gc => {
+    const result = await gc.countActivities();
+    return (result as any)?.totalActivities ?? (result as any)?.count ?? 0;
+  });
 }
 
 export async function getAllActivities(maxActivities = 500): Promise<GarminActivity[]> {
@@ -91,43 +146,35 @@ export async function getAllActivities(maxActivities = 500): Promise<GarminActiv
 }
 
 export async function getActivityDetails(activityId: number): Promise<GarminActivity> {
-  const gc = await getGarminClient();
-  return gc.getActivity({ activityId }) as Promise<GarminActivity>;
+  return withRetry(gc => gc.getActivity({ activityId }));
 }
 
 export async function getHeartRate(date?: Date): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.getHeartRate(date);
+  return withRetry(gc => gc.getHeartRate(date));
 }
 
 export async function getSleepData(date?: Date): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.getSleepData(date);
+  return withRetry(gc => gc.getSleepData(date));
 }
 
 export async function getSteps(date?: Date): Promise<number> {
-  const gc = await getGarminClient();
-  return gc.getSteps(date);
+  return withRetry(gc => gc.getSteps(date));
 }
 
 export async function getUserProfile(): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.getUserProfile();
+  return withRetry(gc => gc.getUserProfile());
 }
 
 export async function getUserSettings(): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.getUserSettings();
+  return withRetry(gc => gc.getUserSettings());
 }
 
 export async function getWorkouts(start = 0, limit = 20): Promise<any[]> {
-  const gc = await getGarminClient();
-  return gc.getWorkouts(start, limit);
+  return withRetry(gc => gc.getWorkouts(start, limit));
 }
 
 export async function getWorkoutDetail(workoutId: string): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.getWorkoutDetail({ workoutId });
+  return withRetry(gc => gc.getWorkoutDetail({ workoutId }));
 }
 
 export async function addRunningWorkout(
@@ -135,31 +182,242 @@ export async function addRunningWorkout(
   meters: number,
   description: string
 ): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.addRunningWorkout(name, meters, description);
+  return withRetry(gc => gc.addRunningWorkout(name, meters, description));
+}
+
+/** Create a structured workout with multiple steps (warmup, intervals, rest, cooldown) */
+export async function addStructuredWorkout(workout: GarminWorkoutPayload): Promise<any> {
+  return withRetry(gc => gc.addWorkout(workout));
+}
+
+// --- Structured workout types ---
+
+export interface GarminWorkoutStep {
+  type: "ExecutableStepDTO";
+  stepId: null;
+  stepOrder: number;
+  childStepId: null;
+  description: string | null;
+  stepType: { stepTypeId: number; stepTypeKey: string };
+  endCondition: { conditionTypeKey: string; conditionTypeId: number };
+  preferredEndConditionUnit: { unitKey: string } | null;
+  endConditionValue: number | null;
+  endConditionCompare: null;
+  endConditionZone: null;
+  targetType: { workoutTargetTypeId: number; workoutTargetTypeKey: string };
+  targetValueOne: number | null;
+  targetValueTwo: number | null;
+  zoneNumber: null;
+}
+
+export interface GarminRepeatStep {
+  type: "RepeatGroupDTO";
+  stepId: null;
+  stepOrder: number;
+  stepType: { stepTypeId: number; stepTypeKey: "repeat" };
+  numberOfIterations: number;
+  workoutSteps: GarminWorkoutStep[];
+  smartRepeat: boolean;
+  childStepId: null;
+}
+
+export interface GarminWorkoutPayload {
+  workoutId?: undefined;
+  sportType: { sportTypeId: number; sportTypeKey: string };
+  workoutName: string;
+  description?: string;
+  workoutSegments: {
+    segmentOrder: number;
+    sportType: { sportTypeId: number; sportTypeKey: string };
+    workoutSteps: (GarminWorkoutStep | GarminRepeatStep)[];
+  }[];
+}
+
+const SPORT_RUNNING = { sportTypeId: 1, sportTypeKey: "running" };
+
+const STEP_TYPES: Record<string, { stepTypeId: number; stepTypeKey: string }> = {
+  warmup:   { stepTypeId: 1, stepTypeKey: "warmup" },
+  cooldown: { stepTypeId: 2, stepTypeKey: "cooldown" },
+  interval: { stepTypeId: 3, stepTypeKey: "interval" },
+  recovery: { stepTypeId: 4, stepTypeKey: "recovery" },
+  rest:     { stepTypeId: 5, stepTypeKey: "rest" },
+  repeat:   { stepTypeId: 6, stepTypeKey: "repeat" },
+};
+
+const END_CONDITIONS: Record<string, { conditionTypeId: number; conditionTypeKey: string }> = {
+  distance:   { conditionTypeId: 3, conditionTypeKey: "distance" },
+  time:       { conditionTypeId: 2, conditionTypeKey: "time" },
+  lap_button: { conditionTypeId: 1, conditionTypeKey: "lap.button" },
+};
+
+const UNIT_KEYS: Record<string, { unitKey: string }> = {
+  kilometer: { unitKey: "kilometer" },
+  meter:     { unitKey: "meter" },
+  second:    { unitKey: "second" },
+};
+
+const TARGET_NONE = { workoutTargetTypeId: 1, workoutTargetTypeKey: "no.target" };
+const TARGET_PACE = { workoutTargetTypeId: 6, workoutTargetTypeKey: "pace.zone" };
+
+function makeStep(
+  order: number,
+  stepType: string,
+  opts: {
+    endType?: "distance" | "time" | "lap_button";
+    endValue?: number | null; // meters for distance, seconds for time
+    unit?: "kilometer" | "meter" | "second";
+    description?: string | null;
+    targetPaceMinPerKm?: number | null; // e.g. 5.5 for 5:30/km — min pace
+    targetPaceMaxPerKm?: number | null; // max pace
+  } = {}
+): GarminWorkoutStep {
+  const st = STEP_TYPES[stepType] ?? STEP_TYPES.interval;
+  const endType = opts.endType ?? "lap_button";
+  const ec = END_CONDITIONS[endType] ?? END_CONDITIONS.lap_button;
+  const unit = opts.unit ?? (endType === "distance" ? "meter" : endType === "time" ? "second" : "meter");
+
+  let targetType = TARGET_NONE;
+  let targetValueOne: number | null = null;
+  let targetValueTwo: number | null = null;
+
+  // Pace targets: Garmin expects m/s values
+  if (opts.targetPaceMinPerKm != null && opts.targetPaceMaxPerKm != null) {
+    targetType = TARGET_PACE;
+    // Convert min/km to m/s (faster pace = higher m/s = lower min/km)
+    targetValueOne = 1000 / (opts.targetPaceMaxPerKm * 60); // faster (higher m/s)
+    targetValueTwo = 1000 / (opts.targetPaceMinPerKm * 60); // slower (lower m/s)
+  }
+
+  return {
+    type: "ExecutableStepDTO",
+    stepId: null,
+    stepOrder: order,
+    childStepId: null,
+    description: opts.description ?? null,
+    stepType: st,
+    endCondition: ec,
+    preferredEndConditionUnit: endType !== "lap_button" ? UNIT_KEYS[unit] ?? null : null,
+    endConditionValue: opts.endValue ?? null,
+    endConditionCompare: null,
+    endConditionZone: null,
+    targetType,
+    targetValueOne,
+    targetValueTwo,
+    zoneNumber: null,
+  };
+}
+
+function makeRepeat(
+  order: number,
+  iterations: number,
+  steps: GarminWorkoutStep[]
+): GarminRepeatStep {
+  return {
+    type: "RepeatGroupDTO",
+    stepId: null,
+    stepOrder: order,
+    stepType: STEP_TYPES.repeat as any,
+    numberOfIterations: iterations,
+    workoutSteps: steps,
+    smartRepeat: false,
+    childStepId: null,
+  };
+}
+
+export interface WorkoutStepInput {
+  type: "warmup" | "cooldown" | "interval" | "recovery" | "rest";
+  distance_meters?: number;
+  duration_seconds?: number;
+  description?: string;
+  target_pace_min_per_km?: number; // slower bound, e.g. 6.0
+  target_pace_max_per_km?: number; // faster bound, e.g. 5.0
+  repeat?: number; // if set, this step + the next "recovery" step repeat N times
+}
+
+/**
+ * Build a structured Garmin workout from a list of step inputs.
+ * Supports warmup, cooldown, intervals with repeats, recovery, rest, and pace targets.
+ */
+export function buildStructuredWorkout(
+  name: string,
+  description: string,
+  steps: WorkoutStepInput[]
+): GarminWorkoutPayload {
+  const workoutSteps: (GarminWorkoutStep | GarminRepeatStep)[] = [];
+  let order = 1;
+  let i = 0;
+
+  while (i < steps.length) {
+    const s = steps[i];
+
+    // If this step has a repeat count, group it with the following recovery step
+    if (s.repeat && s.repeat > 1) {
+      const intervalStep = makeStep(1, s.type, {
+        endType: s.distance_meters ? "distance" : s.duration_seconds ? "time" : "lap_button",
+        endValue: s.distance_meters ?? s.duration_seconds ?? null,
+        unit: s.distance_meters ? "meter" : "second",
+        description: s.description,
+        targetPaceMinPerKm: s.target_pace_min_per_km,
+        targetPaceMaxPerKm: s.target_pace_max_per_km,
+      });
+
+      const repeatChildren: GarminWorkoutStep[] = [intervalStep];
+
+      // Check if next step is recovery/rest — include it in the repeat group
+      if (i + 1 < steps.length && (steps[i + 1].type === "recovery" || steps[i + 1].type === "rest")) {
+        const recStep = steps[i + 1];
+        repeatChildren.push(makeStep(2, recStep.type, {
+          endType: recStep.distance_meters ? "distance" : recStep.duration_seconds ? "time" : "lap_button",
+          endValue: recStep.distance_meters ?? recStep.duration_seconds ?? null,
+          unit: recStep.distance_meters ? "meter" : "second",
+          description: recStep.description,
+        }));
+        i++; // skip the recovery step
+      }
+
+      workoutSteps.push(makeRepeat(order++, s.repeat, repeatChildren));
+    } else {
+      // Regular step
+      workoutSteps.push(makeStep(order++, s.type, {
+        endType: s.distance_meters ? "distance" : s.duration_seconds ? "time" : "lap_button",
+        endValue: s.distance_meters ?? s.duration_seconds ?? null,
+        unit: s.distance_meters ? "meter" : "second",
+        description: s.description,
+        targetPaceMinPerKm: s.target_pace_min_per_km,
+        targetPaceMaxPerKm: s.target_pace_max_per_km,
+      }));
+    }
+    i++;
+  }
+
+  return {
+    sportType: SPORT_RUNNING,
+    workoutName: name,
+    description,
+    workoutSegments: [{
+      segmentOrder: 1,
+      sportType: SPORT_RUNNING,
+      workoutSteps,
+    }],
+  };
 }
 
 export async function deleteWorkout(workoutId: string): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.deleteWorkout({ workoutId });
+  return withRetry(gc => gc.deleteWorkout({ workoutId }));
 }
 
 export async function scheduleWorkout(workoutId: string, date?: Date): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.scheduleWorkout({ workoutId }, date);
+  return withRetry(gc => gc.scheduleWorkout({ workoutId }, date));
 }
 
 export async function getTrainingStatus(date?: Date): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.getTrainingStatus(date);
+  return withRetry(gc => gc.getTrainingStatus(date));
 }
 
 export async function getHRVData(date?: Date): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.getHRVData(date);
+  return withRetry(gc => gc.getHRVData(date));
 }
 
 export async function getPersonalInfo(): Promise<any> {
-  const gc = await getGarminClient();
-  return gc.getPersonalInfo();
+  return withRetry(gc => gc.getPersonalInfo());
 }

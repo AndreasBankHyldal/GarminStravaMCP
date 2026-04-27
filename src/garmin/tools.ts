@@ -362,31 +362,62 @@ export function registerGarminTools(server: McpServer): void {
 
   server.tool(
     "garmin_add_running_workout",
-    "Create a running workout on Garmin Connect. This will appear in the Garmin Connect app and can sync to your watch.",
+    `Create a structured running workout on Garmin Connect with steps like warmup, intervals, recovery, cooldown. Syncs to your watch with step-by-step guidance during the run.
+
+For a simple single-distance run, just provide name + distance_km.
+For structured workouts (intervals, tempo), provide the steps array.
+
+Example interval workout steps:
+  [{"type":"warmup","distance_meters":2000,"description":"Easy jog"},
+   {"type":"interval","distance_meters":800,"repeat":4,"target_pace_max_per_km":4.5,"target_pace_min_per_km":5.0,"description":"Fast"},
+   {"type":"recovery","duration_seconds":120,"description":"Slow jog"},
+   {"type":"cooldown","distance_meters":1500,"description":"Easy jog"}]`,
     {
-      name: z.string().describe("Workout name (e.g. 'Easy 5K Run')"),
-      distance_km: z.number().describe("Target distance in kilometers"),
+      name: z.string().describe("Workout name (e.g. '4x800m Intervals')"),
+      distance_km: z.number().optional().describe("Total distance in km (used only for simple single-step workouts)"),
       description: z.string().default("").describe("Workout description/notes"),
+      steps: z.array(z.object({
+        type: z.enum(["warmup", "cooldown", "interval", "recovery", "rest"]).describe("Step type"),
+        distance_meters: z.number().optional().describe("Step distance in meters"),
+        duration_seconds: z.number().optional().describe("Step duration in seconds (alternative to distance)"),
+        description: z.string().optional().describe("Step description shown on watch"),
+        repeat: z.number().optional().describe("Repeat this step + following recovery N times (for intervals)"),
+        target_pace_min_per_km: z.number().optional().describe("Slowest target pace in min/km (e.g. 6.0 for 6:00/km)"),
+        target_pace_max_per_km: z.number().optional().describe("Fastest target pace in min/km (e.g. 4.5 for 4:30/km)"),
+      })).optional().describe("Structured workout steps. If omitted, creates a simple single-distance run."),
     },
-    async ({ name, distance_km, description }) => {
+    async ({ name, distance_km, description, steps }) => {
       try {
-        const meters = Math.round(distance_km * 1000);
-        const result = await garminClient.addRunningWorkout(name, meters, description);
+        let result: any;
+
+        if (steps && steps.length > 0) {
+          // Structured workout with steps
+          const payload = garminClient.buildStructuredWorkout(name, description, steps);
+          result = await garminClient.addStructuredWorkout(payload);
+        } else if (distance_km) {
+          // Simple single-distance workout
+          const meters = Math.round(distance_km * 1000);
+          result = await garminClient.addRunningWorkout(name, meters, description);
+        } else {
+          return {
+            content: [{ type: "text", text: "Error: Provide either distance_km for a simple run or steps for a structured workout." }],
+            isError: true,
+          };
+        }
+
+        const workoutId = result?.workoutId ?? result?.id;
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  success: true,
-                  message: `Workout "${name}" (${distance_km}km) created on Garmin Connect! It will appear in your Garmin Connect app and can be sent to your watch.`,
-                  workout: result,
-                },
-                null,
-                2
-              ),
-            },
-          ],
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              workout_id: workoutId,
+              message: steps
+                ? `Structured workout "${name}" with ${steps.length} steps created on Garmin Connect! It will sync to your watch with step-by-step guidance.`
+                : `Workout "${name}" (${distance_km}km) created on Garmin Connect!`,
+              workout: result,
+            }, null, 2),
+          }],
         };
       } catch (err: any) {
         return {

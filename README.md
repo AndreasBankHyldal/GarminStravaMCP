@@ -16,20 +16,37 @@ An MCP (Model Context Protocol) server that integrates with **Strava** and **Gar
 - Personal records scanner (fastest pace, highest HR, longest run, etc.)
 - Fitness stats, VO2max, and training status
 - Heart rate, HRV, sleep, and step data
-- Create, schedule, and delete workouts (syncs to your watch)
+- **Structured workouts** with step-by-step guidance on your watch (warmup → intervals → recovery → cooldown)
+- Schedule workouts on your Garmin calendar (syncs to watch)
 - Training status and recovery insights
 
 ### 📊 Analysis
 - Run performance analysis (pace consistency, HR drift, split analysis, effort classification)
 - Training trends over weeks/months (weekly mileage, pace trends)
 - Compare Strava vs Garmin data for the same activity
+- **Race day strategy** — VDOT-based pacing plan with km-by-km splits, HR targets, and weather/elevation adjustments
 - Pre-computed effort levels and HR zone classification on all activities
 
 ### 📋 Training Plans
 - Create multi-week training plans stored locally (SQLite)
+- **Sync to Garmin calendar** — workouts appear on the correct dates and sync to your watch
+- **Structured workouts** — intervals, tempo, long runs all get proper step-by-step structure (not just a single distance)
 - Track planned workouts (easy run, tempo, intervals, long run, rest)
 - Check plan compliance against actual activities
-- Push key workouts to Garmin Connect
+
+#### Structured Workout Steps
+
+When synced to Garmin, each workout type gets appropriate step structure on your watch:
+
+| Workout Type | Garmin Steps |
+|---|---|
+| **Intervals** | Warmup → N×(fast interval + jog recovery) → Cooldown |
+| **Tempo** | Warmup → Tempo block at target pace → Cooldown |
+| **Long Run** | Easy start → Steady main block → Easy finish |
+| **Easy/Recovery** | Warmup → Easy main → Cooldown |
+| **Race** | Warmup → Race pace → Cooldown |
+
+Your watch beeps at each transition and shows target pace where applicable.
 
 ### 🧠 Smart Formatting
 All activity data includes enriched context to help AI assistants reason accurately:
@@ -159,7 +176,7 @@ Add to your `.vscode/mcp.json`:
 | `garmin_get_sleep` | Get sleep data and quality scores |
 | `garmin_get_steps` | Get daily step count |
 | `garmin_get_workouts` | Get planned workouts from Garmin |
-| `garmin_add_running_workout` | Create a running workout (syncs to watch) |
+| `garmin_add_running_workout` | Create a structured running workout with steps (warmup, intervals, recovery, cooldown) — syncs to watch |
 | `garmin_schedule_workout` | Schedule a workout for a specific date |
 | `garmin_delete_workout` | Delete a workout from Garmin |
 
@@ -170,12 +187,13 @@ Add to your `.vscode/mcp.json`:
 | `analyze_run_performance` | Deep analysis of a run: pace consistency, HR drift, splits |
 | `compare_activities` | Compare Strava vs Garmin data for the same activity |
 | `get_training_trends` | Weekly mileage, pace, and HR trends |
+| `race_day_strategy` | VDOT-based race pacing plan with km-by-km splits, HR targets, weather/elevation adjustments |
 
 ### Training Plans
 
 | Tool | Description |
 |------|-------------|
-| `create_training_plan` | Create a multi-week training plan |
+| `create_training_plan` | Create a multi-week training plan (optionally sync structured workouts to Garmin calendar) |
 | `get_training_plan` | View a training plan and its workouts |
 | `update_training_plan` | Modify a training plan or its workouts |
 | `check_plan_compliance` | Check adherence to training plan vs actual activities |
@@ -191,6 +209,8 @@ Once connected, try asking your AI assistant:
 - *"What's my fastest 5K ever?"*
 - *"Show me all runs over 15km this year"*
 - *"Create a 4-week half marathon training plan starting next Monday"*
+- *"Make me an interval workout plan and sync it to my Garmin"*
+- *"Create a race day strategy for a 10K in 50 minutes on a flat course"*
 - *"Am I ready for a hard workout today?"*
 - *"How well am I following my training plan?"*
 - *"What was my sleep quality last night?"*
@@ -239,7 +259,9 @@ npm run strava-auth
 
 - **MCP transport**: stdio (newline-delimited JSON). All non-MCP stdout is redirected to stderr to prevent protocol corruption.
 - **Strava OAuth**: Tokens saved to `.strava-tokens.json` and auto-refreshed. The `.env` file holds initial/fallback tokens only.
-- **Garmin tokens**: Cached in `.garmin-tokens/` directory to avoid repeated logins.
+- **Garmin auth**: Token-first authentication with auto-retry on 403 and a 60-second login cooldown to avoid rate limiting (429). Tokens cached in `.garmin-tokens/`.
+- **Structured workouts**: Built using Garmin's `workoutSegments` API with `ExecutableStepDTO` and `RepeatGroupDTO` step types. Supports warmup, interval, recovery, rest, cooldown, and repeat groups with pace targets.
+- **VDOT calculations**: Race day strategy uses the Daniels & Gilbert formula to estimate VO2max from recent efforts and predict equivalent race times.
 - **DB path**: Uses absolute paths to work correctly when launched from Claude Desktop (which has a different CWD than the project root).
 
 ## Rate Limits
