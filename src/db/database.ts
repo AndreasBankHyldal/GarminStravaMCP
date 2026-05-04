@@ -65,10 +65,21 @@ function runMigrations(db: Database.Database): void {
       notes TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS garmin_workout_sync (
+      planned_workout_id INTEGER PRIMARY KEY REFERENCES planned_workouts(id) ON DELETE CASCADE,
+      plan_id TEXT NOT NULL REFERENCES training_plans(id) ON DELETE CASCADE,
+      garmin_workout_id TEXT NOT NULL,
+      last_workout_hash TEXT NOT NULL,
+      scheduled_date TEXT NOT NULL,
+      last_sync_status TEXT NOT NULL DEFAULT 'scheduled',
+      synced_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_activity_cache_source ON activity_cache(source);
     CREATE INDEX IF NOT EXISTS idx_activity_cache_date ON activity_cache(start_date);
     CREATE INDEX IF NOT EXISTS idx_planned_workouts_plan ON planned_workouts(plan_id);
     CREATE INDEX IF NOT EXISTS idx_planned_workouts_date ON planned_workouts(date);
+    CREATE INDEX IF NOT EXISTS idx_garmin_sync_plan ON garmin_workout_sync(plan_id);
   `);
 }
 

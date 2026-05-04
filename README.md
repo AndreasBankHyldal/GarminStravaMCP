@@ -24,13 +24,19 @@ An MCP (Model Context Protocol) server that integrates with **Strava** and **Gar
 - Run performance analysis (pace consistency, HR drift, split analysis, effort classification)
 - Training trends over weeks/months (weekly mileage, pace trends)
 - Compare Strava vs Garmin data for the same activity
-- **Race day strategy** — VDOT-based pacing plan with km-by-km splits, HR targets, and weather/elevation adjustments
+- **Best efforts calculator** — rolling 1K/5K/10K/HM PRs from Strava splits/streams
+- **Load & fatigue model** — CTL/ATL/TSB-style model with acute:chronic ratio risk flags
+- **Readiness score** — combines sleep, HRV, resting HR, and training load into clear daily guidance
+- **Weekly coach brief** — automated performance summary + actionable recommendations
+- **Race day strategy** — VDOT-based pacing plan with km-by-km splits, HR targets, weather/elevation/wind adjustments, fueling/hydration plan, and course tactics
 - Pre-computed effort levels and HR zone classification on all activities
 
 ### 📋 Training Plans
 - Create multi-week training plans stored locally (SQLite)
+- **Smart Garmin sync (delta sync)** — create/update/reschedule/remove workouts without duplicates
 - **Sync to Garmin calendar** — workouts appear on the correct dates and sync to your watch
 - **Structured workouts** — intervals, tempo, long runs all get proper step-by-step structure (not just a single distance)
+- **Adaptive plan engine** — automatically adjust upcoming workouts based on compliance and current fatigue/load
 - Track planned workouts (easy run, tempo, intervals, long run, rest)
 - Check plan compliance against actual activities
 
@@ -187,7 +193,11 @@ Add to your `.vscode/mcp.json`:
 | `analyze_run_performance` | Deep analysis of a run: pace consistency, HR drift, splits |
 | `compare_activities` | Compare Strava vs Garmin data for the same activity |
 | `get_training_trends` | Weekly mileage, pace, and HR trends |
-| `race_day_strategy` | VDOT-based race pacing plan with km-by-km splits, HR targets, weather/elevation adjustments |
+| `race_day_strategy` | VDOT-based race pacing plan with km-by-km splits, HR targets, weather/elevation/wind adjustments, and execution pack (fueling/hydration/course tactics) |
+| `get_best_efforts` | Compute rolling best efforts (1K/5K/10K/HM) from Strava splits/streams |
+| `get_load_fatigue_model` | CTL/ATL/TSB-style load model with acute:chronic ratio and fatigue risk |
+| `get_readiness_score` | Daily readiness score from sleep, HRV, resting HR, and load balance |
+| `weekly_coach_brief` | Weekly summary with trend deltas, adherence snapshot, and coaching notes |
 
 ### Training Plans
 
@@ -195,7 +205,9 @@ Add to your `.vscode/mcp.json`:
 |------|-------------|
 | `create_training_plan` | Create a multi-week training plan (optionally sync structured workouts to Garmin calendar) |
 | `get_training_plan` | View a training plan and its workouts |
-| `update_training_plan` | Modify a training plan or its workouts |
+| `update_training_plan` | Modify a training plan/workouts (optionally smart-sync updates to Garmin) |
+| `sync_training_plan_to_garmin` | Smart delta-sync a plan to Garmin calendar (create/update/reschedule/remove) |
+| `adjust_training_plan` | Adaptive plan optimization based on compliance + current load/fatigue |
 | `check_plan_compliance` | Check adherence to training plan vs actual activities |
 
 ## Example Prompts
@@ -208,9 +220,14 @@ Once connected, try asking your AI assistant:
 - *"Compare my last run between Strava and Garmin"*
 - *"What's my fastest 5K ever?"*
 - *"Show me all runs over 15km this year"*
+- *"Find my fastest 5K and fastest 10K from all recent runs"*
+- *"Give me my training load model (CTL/ATL/TSB) for the last 90 days"*
+- *"What is my readiness score today and should I do hard intervals?"*
+- *"Give me a weekly coach brief for last week"*
 - *"Create a 4-week half marathon training plan starting next Monday"*
 - *"Make me an interval workout plan and sync it to my Garmin"*
-- *"Create a race day strategy for a 10K in 50 minutes on a flat course"*
+- *"Create a race day strategy for a 10K in 50 minutes with 60m elevation, 18°C and 20 km/h wind"*
+- *"Adjust my plan based on the last 2 weeks and apply the changes"*
 - *"Am I ready for a hard workout today?"*
 - *"How well am I following my training plan?"*
 - *"What was my sleep quality last night?"*
@@ -260,8 +277,12 @@ npm run strava-auth
 - **MCP transport**: stdio (newline-delimited JSON). All non-MCP stdout is redirected to stderr to prevent protocol corruption.
 - **Strava OAuth**: Tokens saved to `.strava-tokens.json` and auto-refreshed. The `.env` file holds initial/fallback tokens only.
 - **Garmin auth**: Token-first authentication with auto-retry on 403 and a 60-second login cooldown to avoid rate limiting (429). Tokens cached in `.garmin-tokens/`.
+- **Garmin reliability layer**: request queueing + request spacing, 429 backoff with retries, periodic token health checks, and re-auth retry on session expiry.
 - **Structured workouts**: Built using Garmin's `workoutSegments` API with `ExecutableStepDTO` and `RepeatGroupDTO` step types. Supports warmup, interval, recovery, rest, cooldown, and repeat groups with pace targets.
+- **Smart Garmin plan sync**: state tracked in `garmin_workout_sync` table so updates become delta operations (no duplicate workout spam).
 - **VDOT calculations**: Race day strategy uses the Daniels & Gilbert formula to estimate VO2max from recent efforts and predict equivalent race times.
+- **Best efforts**: rolling-distance PRs use split windows first, then stream-based interpolation fallback for accuracy.
+- **Readiness model**: combines Garmin recovery metrics with load balance (TSB + acute:chronic ratio) for daily training guidance.
 - **DB path**: Uses absolute paths to work correctly when launched from Claude Desktop (which has a different CWD than the project root).
 
 ## Rate Limits

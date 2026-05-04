@@ -31,6 +31,12 @@ Available capabilities:
 - Create workouts on Garmin Connect (syncs to your watch)
 - Create and edit activities on Strava
 - Search all activities and find personal records
+- Calculate rolling best efforts (1K/5K/10K/etc.) from streams/splits
+- Compute training load and fatigue model (CTL/ATL/TSB style)
+- Produce a daily readiness score from sleep/HRV/HR/load
+- Generate weekly coach brief with trend-based recommendations
+- Auto-adjust training plans based on compliance and fatigue
+- Smart delta-sync training plans to Garmin calendar
 
 All dates include day-of-week and human-readable format to avoid temporal confusion.
 Activities include effort level classification and heart rate zone information.

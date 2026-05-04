@@ -12,6 +12,62 @@ const TOKEN_DIR = path.resolve(__dirname, "..", "..", ".garmin-tokens");
 let client: any = null;
 let lastLoginAttempt = 0;
 const LOGIN_COOLDOWN_MS = 60_000; // Wait at least 60s between login attempts
+let lastHealthCheckAt = 0;
+let requestQueue: Promise<void> = Promise.resolve();
+let lastRequestAt = 0;
+
+const HEALTH_CHECK_INTERVAL_MS = 10 * 60_000;
+const REQUEST_GAP_MS = 450;
+const RATE_LIMIT_BASE_DELAY_MS = 2_000;
+const MAX_RATE_LIMIT_RETRIES = 3;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isAuthError(err: any): boolean {
+  const status = err?.response?.status ?? err?.status;
+  const msg = String(err?.message ?? "");
+  return status === 401 || status === 403 || /401|403|forbidden|unauthorized/i.test(msg);
+}
+
+function isRateLimitError(err: any): boolean {
+  const status = err?.response?.status ?? err?.status;
+  const msg = String(err?.message ?? "");
+  return status === 429 || /429|too many requests|rate limit/i.test(msg);
+}
+
+function getRetryDelayMs(err: any, attempt: number): number {
+  const retryAfterHeader =
+    err?.response?.headers?.["retry-after"] ??
+    err?.response?.headers?.get?.("retry-after");
+  const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return retryAfterSeconds * 1000;
+  }
+
+  const exponential = RATE_LIMIT_BASE_DELAY_MS * Math.pow(2, attempt);
+  const jitter = Math.floor(Math.random() * 800);
+  return exponential + jitter;
+}
+
+function enqueueRequest<T>(task: () => Promise<T>): Promise<T> {
+  const run = async (): Promise<T> => {
+    const gap = Date.now() - lastRequestAt;
+    if (gap < REQUEST_GAP_MS) {
+      await sleep(REQUEST_GAP_MS - gap);
+    }
+    lastRequestAt = Date.now();
+    return task();
+  };
+
+  const next = requestQueue.then(run, run);
+  requestQueue = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
 
 async function tryLoadTokens(gc: any): Promise<boolean> {
   if (!fs.existsSync(TOKEN_DIR)) return false;
@@ -49,7 +105,24 @@ async function performLogin(gc: any): Promise<void> {
 }
 
 export async function getGarminClient(): Promise<any> {
-  if (client) return client;
+  if (client) {
+    // Periodically verify token health to avoid using stale sessions indefinitely.
+    if (Date.now() - lastHealthCheckAt > HEALTH_CHECK_INTERVAL_MS) {
+      try {
+        await client.getUserProfile();
+        lastHealthCheckAt = Date.now();
+      } catch (err: any) {
+        if (isAuthError(err)) {
+          client = null;
+        } else {
+          throw err;
+        }
+      }
+    } else {
+      return client;
+    }
+    if (client) return client;
+  }
 
   if (!config.garmin.username || !config.garmin.password) {
     throw new Error(
@@ -75,33 +148,48 @@ export async function getGarminClient(): Promise<any> {
   }
 
   client = gc;
+  lastHealthCheckAt = Date.now();
   return client;
 }
 
 /** Wrap a Garmin API call with automatic re-auth on 403 */
 async function withRetry<T>(fn: (gc: any) => Promise<T>): Promise<T> {
-  const gc = await getGarminClient();
-  try {
-    return await fn(gc);
-  } catch (err: any) {
-    const status = err?.response?.status ?? err?.status;
-    const msg = err?.message ?? "";
-    if (status === 403 || status === 401 || msg.includes("403") || msg.includes("Forbidden")) {
-      // Token expired — clear client and re-login
-      console.error("Garmin session expired, re-authenticating...");
-      client = null;
+  return enqueueRequest(async () => {
+    let gc = await getGarminClient();
+
+    for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
       try {
-        const freshGc = await getGarminClient();
-        await performLogin(freshGc);
-        client = freshGc;
-        return await fn(freshGc);
-      } catch (retryErr: any) {
-        client = null;
-        throw new Error(`Garmin re-auth failed: ${retryErr.message}`);
+        return await fn(gc);
+      } catch (err: any) {
+        if (isAuthError(err)) {
+          // Session likely expired — clear and re-auth once.
+          console.error("Garmin session expired, re-authenticating...");
+          client = null;
+          try {
+            gc = await getGarminClient();
+            await performLogin(gc);
+            client = gc;
+            lastHealthCheckAt = Date.now();
+            continue;
+          } catch (retryErr: any) {
+            client = null;
+            throw new Error(`Garmin re-auth failed: ${retryErr.message}`);
+          }
+        }
+
+        if (isRateLimitError(err) && attempt < MAX_RATE_LIMIT_RETRIES) {
+          const waitMs = getRetryDelayMs(err, attempt);
+          console.error(`Garmin rate-limited (429). Retrying in ${Math.ceil(waitMs / 1000)}s...`);
+          await sleep(waitMs);
+          continue;
+        }
+
+        throw err;
       }
     }
-    throw err;
-  }
+
+    throw new Error("Garmin request failed after retries.");
+  });
 }
 
 export interface GarminActivity {
