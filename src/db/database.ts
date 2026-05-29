@@ -82,10 +82,3 @@ function runMigrations(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_garmin_sync_plan ON garmin_workout_sync(plan_id);
   `);
 }
-
-export function closeDb(): void {
-  if (db) {
-    db.close();
-    db = null;
-  }
-}

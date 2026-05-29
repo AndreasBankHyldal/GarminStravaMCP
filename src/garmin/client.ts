@@ -215,13 +215,6 @@ export async function getActivities(start = 0, limit = 20): Promise<GarminActivi
   return withRetry(gc => gc.getActivities(start, limit));
 }
 
-export async function countActivities(): Promise<number> {
-  return withRetry(async gc => {
-    const result = await gc.countActivities();
-    return (result as any)?.totalActivities ?? (result as any)?.count ?? 0;
-  });
-}
-
 export async function getAllActivities(maxActivities = 500): Promise<GarminActivity[]> {
   const batchSize = 100;
   const all: GarminActivity[] = [];
@@ -259,10 +252,6 @@ export async function getUserSettings(): Promise<any> {
 
 export async function getWorkouts(start = 0, limit = 20): Promise<any[]> {
   return withRetry(gc => gc.getWorkouts(start, limit));
-}
-
-export async function getWorkoutDetail(workoutId: string): Promise<any> {
-  return withRetry(gc => gc.getWorkoutDetail({ workoutId }));
 }
 
 export async function addRunningWorkout(
@@ -504,8 +493,4 @@ export async function getTrainingStatus(date?: Date): Promise<any> {
 
 export async function getHRVData(date?: Date): Promise<any> {
   return withRetry(gc => gc.getHRVData(date));
-}
-
-export async function getPersonalInfo(): Promise<any> {
-  return withRetry(gc => gc.getPersonalInfo());
 }
