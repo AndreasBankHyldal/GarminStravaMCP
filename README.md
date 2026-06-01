@@ -293,6 +293,19 @@ npm run strava-auth
 - **Strava**: 100 requests per 15 minutes, 1,000 per day
 - **Garmin**: Unofficial API — be conservative with request frequency
 
+## Strava API 2026 Compliance Notes
+
+Strava announced developer program changes in 2026 (ahead of its IPO). Status for this server, as of June 2026:
+
+- **Endpoints used are unaffected.** This server only calls core athlete/activity/streams endpoints (`/athlete`, `/athlete/activities`, `/activities/{id}`, `/activities/{id}/streams`, `/athletes/{id}/stats`). The retiring endpoints (e.g. club details) are **not used here**, so no code migration is required.
+- **Auth model is already compliant.** Fully OAuth-authenticated with scopes `read, activity:read_all, profile:read_all`; only the authenticated user's own data is ever fetched (satisfies the "own-data-only" display rule and the move to authenticated-only access).
+- **⚠️ Developer fee (~$11.99/month).** May apply to API access generally. If unpaid and enforced on your client ID, token refresh in [src/strava/auth.ts](src/strava/auth.ts) will start failing. Verify on the [Strava developer dashboard](https://www.strava.com/settings/api).
+- **⚠️ New developer program review.** Existing apps must resubmit an application for review (6-month window). This is a dashboard action, not a code change.
+- **⚠️ AI-use clause (2024).** The agreement restricts using API data "in AI models or similar applications" — primarily aimed at *training* models. This server only feeds your own data to an assistant for personal analysis, but the wording is broad; be aware of it.
+- **ℹ️ Official Strava MCP connector (planned).** Strava intends to ship a native MCP. No timeline given; no action needed, but it may eventually overlap with this server.
+
+> Verify specifics for your app at [developers.strava.com](https://developers.strava.com/) or `developers@strava.com` before paying or resubmitting — the public announcements are vague on exact endpoint names and dates.
+
 ## Security
 
 The `.gitignore` excludes sensitive files:
