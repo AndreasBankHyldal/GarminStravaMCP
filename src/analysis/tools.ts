@@ -3,12 +3,12 @@ import { z } from "zod";
 import { getDb } from "../db/database.js";
 import * as stravaClient from "../strava/client.js";
 import * as garminClient from "../garmin/client.js";
-import { speedToPacePerKm, enrichDate, formatDuration } from "../utils.js";
+import { speedToPacePerKm, enrichDate, formatDuration, analyzeLaps } from "../utils.js";
 
 export function registerAnalysisTools(server: McpServer): void {
   server.tool(
     "analyze_run_performance",
-    "Analyze a specific run's performance: pace consistency, HR drift, split analysis. Provide a Strava activity ID.",
+    "Analyze a specific run's performance: pace consistency, HR drift, per-lap and per-km split analysis. Surfaces individual laps so interval workouts (e.g. 600m reps) show true rep pace, not just averaged 1km splits. Provide a Strava activity ID.",
     {
       activity_id: z.number().describe("Strava activity ID to analyze"),
     },
@@ -41,6 +41,14 @@ export function registerAnalysisTools(server: McpServer): void {
             max_heartrate: activity.max_heartrate,
           },
         };
+
+        // Lap analysis — essential for interval workouts. The 1km splits below
+        // average each fast rep together with its recovery, hiding the true
+        // interval pace. Laps reflect the actual structure (e.g. 600m reps).
+        const lapAnalysis = analyzeLaps(activity.laps);
+        if (lapAnalysis) {
+          analysis.laps = lapAnalysis;
+        }
 
         // Split analysis
         if (activity.splits_metric?.length) {

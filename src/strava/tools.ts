@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as stravaClient from "./client.js";
-import { enrichDate, speedToPacePerKm, formatDuration, classifyEffort, classifyHRZone } from "../utils.js";
+import { enrichDate, speedToPacePerKm, formatDuration, classifyEffort, classifyHRZone, analyzeLaps } from "../utils.js";
 
 function formatActivity(a: stravaClient.StravaActivity) {
   const paceSecPerKm = a.average_speed > 0 ? 1000 / a.average_speed : 0;
@@ -53,18 +53,19 @@ export function registerStravaTools(server: McpServer): void {
 
   server.tool(
     "strava_get_activity_details",
-    "Get detailed data for a specific Strava activity, including laps and splits.",
+    "Get detailed data for a specific Strava activity, including laps and splits. Laps include an interval-workout summary (e.g. '6×600m @ 3:45/km') so rep pace isn't hidden by 1km splits.",
     {
       activity_id: z.number().describe("The Strava activity ID"),
     },
     async ({ activity_id }) => {
       try {
         const activity = await stravaClient.getActivityDetails(activity_id);
+        const lapAnalysis = analyzeLaps(activity.laps);
         const detail = {
           ...formatActivity(activity),
           description: activity.description,
           suffer_score: activity.suffer_score,
-          laps: activity.laps?.map((l) => ({
+          laps: lapAnalysis ?? activity.laps?.map((l) => ({
             name: l.name,
             distance_km: (l.distance / 1000).toFixed(2),
             duration: formatDuration(l.moving_time),

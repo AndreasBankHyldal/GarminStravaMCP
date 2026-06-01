@@ -22,6 +22,7 @@ An MCP (Model Context Protocol) server that integrates with **Strava** and **Gar
 
 ### 📊 Analysis
 - Run performance analysis (pace consistency, HR drift, split analysis, effort classification)
+- **Interval-aware lap analysis** — surfaces each watch lap (e.g. 600m reps) at its true pace instead of averaging it into 1km splits, auto-detects interval workouts, and generates a quick summary like `6×600m @ 3:45/km` (works for any rep distance: 400m, 800m, 1km, mile, mixed/pyramid sessions)
 - Training trends over weeks/months (weekly mileage, pace trends)
 - Compare Strava vs Garmin data for the same activity
 - **Best efforts calculator** — rolling 1K/5K/10K/HM PRs from Strava splits/streams
@@ -161,7 +162,7 @@ Add to your `.vscode/mcp.json`:
 | Tool | Description |
 |------|-------------|
 | `strava_get_activities` | Fetch recent Strava activities with optional date filters |
-| `strava_get_activity_details` | Get detailed data for a Strava activity (laps, splits) |
+| `strava_get_activity_details` | Get detailed data for a Strava activity (interval-aware laps with rep summary, 1km splits) |
 | `strava_get_athlete_stats` | Get aggregate athlete stats (totals, year-to-date) |
 | `strava_get_activity_streams` | Get time-series data (HR, pace, elevation, cadence) |
 | `strava_create_activity` | Create a manual activity on Strava |
@@ -190,7 +191,7 @@ Add to your `.vscode/mcp.json`:
 
 | Tool | Description |
 |------|-------------|
-| `analyze_run_performance` | Deep analysis of a run: pace consistency, HR drift, splits |
+| `analyze_run_performance` | Deep analysis of a run: pace consistency, HR drift, 1km splits, and per-lap interval breakdown (true rep pace + auto interval summary) |
 | `compare_activities` | Compare Strava vs Garmin data for the same activity |
 | `get_training_trends` | Weekly mileage, pace, and HR trends |
 | `race_day_strategy` | VDOT-based race pacing plan with km-by-km splits, HR targets, weather/elevation/wind adjustments, and execution pack (fueling/hydration/course tactics) |
@@ -216,6 +217,7 @@ Once connected, try asking your AI assistant:
 
 - *"Show me my last 10 runs from Strava"*
 - *"Analyze my most recent run — how consistent was my pacing?"*
+- *"What were my rep paces in yesterday's interval session?"*
 - *"What's my weekly mileage trend over the last 8 weeks?"*
 - *"Compare my last run between Strava and Garmin"*
 - *"What's my fastest 5K ever?"*
@@ -239,7 +241,7 @@ Once connected, try asking your AI assistant:
 src/
 ├── index.ts              # Entry point, MCP server setup, resources, prompts
 ├── config.ts             # Manual .env parser (avoids dotenv stdout issues)
-├── utils.ts              # Shared formatting: enrichDate, pace, duration, zones
+├── utils.ts              # Shared formatting: enrichDate, pace, duration, zones, interval/lap analysis
 ├── strava/
 │   ├── auth.ts           # OAuth token management with auto-refresh
 │   ├── auth-flow.ts      # One-time browser OAuth flow (npm run strava-auth)
@@ -282,6 +284,7 @@ npm run strava-auth
 - **Smart Garmin plan sync**: state tracked in `garmin_workout_sync` table so updates become delta operations (no duplicate workout spam).
 - **VDOT calculations**: Race day strategy uses the Daniels & Gilbert formula to estimate VO2max from recent efforts and predict equivalent race times.
 - **Best efforts**: rolling-distance PRs use split windows first, then stream-based interpolation fallback for accuracy.
+- **Interval/lap analysis**: reads the watch's recorded laps (not just Strava's 1km auto-splits), which is where the true rep structure lives. A workout is flagged as intervals when lap pace varies meaningfully and several laps aren't ~1km; work reps (faster than the run's average lap pace) are bucketed to the nearest 100m to absorb GPS noise and summarized as e.g. `6×600m @ 3:45/km`. Requires the run to actually contain laps (lap-button presses, auto-lap, or structured workouts) — runs with only 1km auto-laps have nothing finer to show.
 - **Readiness model**: combines Garmin recovery metrics with load balance (TSB + acute:chronic ratio) for daily training guidance.
 - **DB path**: Uses absolute paths to work correctly when launched from Claude Desktop (which has a different CWD than the project root).
 
@@ -289,6 +292,19 @@ npm run strava-auth
 
 - **Strava**: 100 requests per 15 minutes, 1,000 per day
 - **Garmin**: Unofficial API — be conservative with request frequency
+
+## Strava API 2026 Compliance Notes
+
+Strava announced developer program changes in 2026 (ahead of its IPO). Status for this server, as of June 2026:
+
+- **Endpoints used are unaffected.** This server only calls core athlete/activity/streams endpoints (`/athlete`, `/athlete/activities`, `/activities/{id}`, `/activities/{id}/streams`, `/athletes/{id}/stats`). The retiring endpoints (e.g. club details) are **not used here**, so no code migration is required.
+- **Auth model is already compliant.** Fully OAuth-authenticated with scopes `read, activity:read_all, profile:read_all`; only the authenticated user's own data is ever fetched (satisfies the "own-data-only" display rule and the move to authenticated-only access).
+- **⚠️ Developer fee (~$11.99/month).** May apply to API access generally. If unpaid and enforced on your client ID, token refresh in [src/strava/auth.ts](src/strava/auth.ts) will start failing. Verify on the [Strava developer dashboard](https://www.strava.com/settings/api).
+- **⚠️ New developer program review.** Existing apps must resubmit an application for review (6-month window). This is a dashboard action, not a code change.
+- **⚠️ AI-use clause (2024).** The agreement restricts using API data "in AI models or similar applications" — primarily aimed at *training* models. This server only feeds your own data to an assistant for personal analysis, but the wording is broad; be aware of it.
+- **ℹ️ Official Strava MCP connector (planned).** Strava intends to ship a native MCP. No timeline given; no action needed, but it may eventually overlap with this server.
+
+> Verify specifics for your app at [developers.strava.com](https://developers.strava.com/) or `developers@strava.com` before paying or resubmitting — the public announcements are vague on exact endpoint names and dates.
 
 ## Security
 
