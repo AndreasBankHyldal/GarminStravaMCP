@@ -37,6 +37,12 @@ function isRateLimitError(err: any): boolean {
   return status === 429 || /429|too many requests|rate limit/i.test(msg);
 }
 
+function isMfaRequiredError(err: any): boolean {
+  const msg = String(err?.message ?? "");
+  // The library throws a (Chinese) message when MFA is required but no code channel is provided.
+  return /MFA|mfa|多因|验证码|two.?factor|2fa/i.test(msg);
+}
+
 function getRetryDelayMs(err: any, attempt: number): number {
   const retryAfterHeader =
     err?.response?.headers?.["retry-after"] ??
@@ -143,6 +149,13 @@ export async function getGarminClient(): Promise<any> {
     try {
       await performLogin(gc);
     } catch (err: any) {
+      if (isMfaRequiredError(err)) {
+        throw new Error(
+          "Garmin requires MFA (a code was sent via SMS/email/app), but the MCP server " +
+          "can't prompt for it over stdio. Run `npm run garmin-auth` once in a terminal to " +
+          "enter the code and cache your session tokens, then restart the server."
+        );
+      }
       throw new Error(`Garmin login failed: ${err.message}`);
     }
   }

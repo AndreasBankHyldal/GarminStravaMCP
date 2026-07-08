@@ -4,4 +4,5 @@ data/*.db
 .env
 .strava-tokens.json
 .garmin-tokens/
+.garmin-mfa/
 *.log

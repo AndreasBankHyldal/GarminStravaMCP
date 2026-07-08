@@ -119,7 +119,15 @@ GARMIN_USERNAME=your.email@example.com
 GARMIN_PASSWORD=your_password
 ```
 
-> ⚠️ Garmin uses an unofficial API (`@gooin/garmin-connect`). MFA may require manual intervention. Session tokens are cached in `.garmin-tokens/` to minimize logins.
+If your Garmin account has **MFA / two-factor authentication** enabled (Garmin sends a code via SMS/email/app), run the one-time interactive login so you can enter that code:
+
+```bash
+npm run garmin-auth
+```
+
+This logs in, prompts you for the MFA code, and caches your session to `.garmin-tokens/`. The MCP server reuses those tokens and only needs a fresh login when they expire (avoiding repeated MFA prompts). The server itself runs over stdio and **cannot** prompt for an MFA code — so if you see an MFA error from the server, run `npm run garmin-auth` and restart it.
+
+> ⚠️ Garmin uses an unofficial API (`@gooin/garmin-connect`). Session tokens are cached in `.garmin-tokens/` to minimize logins and avoid triggering MFA on every start.
 
 ### 3. Configure your MCP client
 
@@ -249,6 +257,7 @@ src/
 │   └── tools.ts          # Strava MCP tool definitions
 ├── garmin/
 │   ├── client.ts         # Garmin Connect API wrapper (@gooin/garmin-connect)
+│   ├── auth-flow.ts      # One-time interactive login with MFA support (npm run garmin-auth)
 │   └── tools.ts          # Garmin MCP tool definitions
 ├── analysis/
 │   └── tools.ts          # Run analysis and comparison tools
@@ -272,6 +281,9 @@ npm start
 
 # Re-authenticate Strava
 npm run strava-auth
+
+# Re-authenticate Garmin (interactive, handles MFA/SMS code)
+npm run garmin-auth
 ```
 
 ## Technical Notes
