@@ -1,29 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as garminClient from "./client.js";
-import { enrichDate, speedToPacePerKm, formatDuration, classifyEffort, classifyHRZone } from "../utils.js";
-
-function formatGarminActivity(a: garminClient.GarminActivity) {
-  const paceSecPerKm = a.averageSpeed > 0 ? 1000 / a.averageSpeed : 0;
-  return {
-    id: a.activityId,
-    name: a.activityName,
-    type: a.activityType?.typeKey ?? "unknown",
-    date: enrichDate(a.startTimeLocal),
-    distance_km: a.distance ? +(a.distance / 1000).toFixed(2) : 0,
-    duration: formatDuration(a.duration ?? 0),
-    moving_duration: formatDuration(a.movingDuration ?? 0),
-    pace_per_km: speedToPacePerKm(a.averageSpeed),
-    effort_level: paceSecPerKm > 0 ? classifyEffort(paceSecPerKm) : null,
-    elevation_gain_m: a.elevationGain ?? 0,
-    avg_heartrate: a.averageHR ?? null,
-    max_heartrate: a.maxHR ?? null,
-    hr_zone: a.averageHR ? classifyHRZone(a.averageHR) : null,
-    calories: a.calories ?? null,
-    cadence_spm: a.averageRunningCadenceInStepsPerMinute ?? null,
-    vo2max: a.vO2MaxValue ?? null,
-  };
-}
+import { formatDuration } from "../utils.js";
+import {
+  formatGarminActivity,
+  formatGarminActivityDetails,
+  getGarminMovingSpeed,
+} from "./format.js";
 
 export function registerGarminTools(server: McpServer): void {
   server.tool(
@@ -74,7 +57,7 @@ export function registerGarminTools(server: McpServer): void {
 
         const withHR = activities.filter((a) => a.maxHR > 0);
         const withDist = activities.filter((a) => a.distance > 0);
-        const withSpeed = activities.filter((a) => a.averageSpeed > 0);
+        const withSpeed = activities.filter((a) => getGarminMovingSpeed(a) > 0);
         const withElev = activities.filter((a) => a.elevationGain > 0);
         const withCal = activities.filter((a) => a.calories > 0);
 
@@ -93,8 +76,12 @@ export function registerGarminTools(server: McpServer): void {
         // Fastest pace = highest average speed
         const fastestPace = withSpeed.length > 0
           ? (() => {
-              const best = withSpeed.reduce((max, a) => a.averageSpeed > max.averageSpeed ? a : max);
-              const secPerKm = 1000 / best.averageSpeed;
+              const best = withSpeed.reduce((max, activity) =>
+                getGarminMovingSpeed(activity) > getGarminMovingSpeed(max)
+                  ? activity
+                  : max
+              );
+              const secPerKm = 1000 / getGarminMovingSpeed(best);
               const mins = Math.floor(secPerKm / 60);
               const secs = Math.round(secPerKm % 60);
               return { pace_per_km: `${mins}:${secs.toString().padStart(2, "0")}`, activity: formatGarminActivity(best) };
@@ -182,7 +169,7 @@ export function registerGarminTools(server: McpServer): void {
           date: (a, b) => new Date(a.startTimeLocal).getTime() - new Date(b.startTimeLocal).getTime(),
           distance: (a, b) => a.distance - b.distance,
           duration: (a, b) => a.duration - b.duration,
-          pace: (a, b) => a.averageSpeed - b.averageSpeed,
+          pace: (a, b) => getGarminMovingSpeed(a) - getGarminMovingSpeed(b),
           heartrate: (a, b) => (a.averageHR || 0) - (b.averageHR || 0),
           elevation: (a, b) => (a.elevationGain || 0) - (b.elevationGain || 0),
         };
@@ -215,14 +202,17 @@ export function registerGarminTools(server: McpServer): void {
 
   server.tool(
     "garmin_get_activity_details",
-    "Get detailed data for a specific Garmin activity.",
+    "Get detailed Garmin activity data, including individual laps and interval/recovery structure.",
     {
       activity_id: z.number().describe("The Garmin activity ID"),
     },
     async ({ activity_id }) => {
       try {
-        const activity = await garminClient.getActivityDetails(activity_id);
-        const formatted = formatGarminActivity(activity);
+        const [activity, splits] = await Promise.all([
+          garminClient.getActivityDetails(activity_id),
+          garminClient.getActivitySplits(activity_id),
+        ]);
+        const formatted = formatGarminActivityDetails(activity, splits);
         return {
           content: [{ type: "text", text: JSON.stringify(formatted, null, 2) }],
         };

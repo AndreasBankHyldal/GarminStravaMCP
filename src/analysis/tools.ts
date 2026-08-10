@@ -3,17 +3,224 @@ import { z } from "zod";
 import { getDb } from "../db/database.js";
 import * as stravaClient from "../strava/client.js";
 import * as garminClient from "../garmin/client.js";
+import {
+  formatGarminActivityDetails,
+  hasGarminIntervalStructure,
+} from "../garmin/format.js";
 import { speedToPacePerKm, enrichDate, formatDuration, analyzeLaps } from "../utils.js";
+
+function paceConsistency(paces: number[]) {
+  const avgPace = paces.reduce((a, b) => a + b, 0) / paces.length;
+  const paceVariance =
+    paces.reduce((sum, pace) => sum + Math.pow(pace - avgPace, 2), 0) / paces.length;
+  const standardDeviation = Math.sqrt(paceVariance);
+
+  return {
+    std_deviation_min: standardDeviation.toFixed(2),
+    rating:
+      standardDeviation < 0.2
+        ? "Excellent"
+        : standardDeviation < 0.4
+        ? "Good"
+        : standardDeviation < 0.7
+        ? "Fair"
+        : "Variable",
+  };
+}
+
+function heartRateDrift(heartRates: number[], times?: number[]) {
+  if (heartRates.length < 2) return null;
+
+  let firstHalf: number[];
+  let secondHalf: number[];
+  if (times?.length === heartRates.length) {
+    const samples = heartRates
+      .map((heartRate, index) => ({ heartRate, time: times[index] }))
+      .filter(
+        (sample) =>
+          Number.isFinite(sample.heartRate) &&
+          sample.heartRate > 0 &&
+          Number.isFinite(sample.time)
+      );
+    if (samples.length < 2) return null;
+    const temporalMidpoint =
+      (samples[0].time + samples[samples.length - 1].time) / 2;
+    firstHalf = samples
+      .filter((sample) => sample.time <= temporalMidpoint)
+      .map((sample) => sample.heartRate);
+    secondHalf = samples
+      .filter((sample) => sample.time > temporalMidpoint)
+      .map((sample) => sample.heartRate);
+  } else {
+    const validHeartRates = heartRates.filter(
+      (heartRate) => Number.isFinite(heartRate) && heartRate > 0
+    );
+    const sampleMidpoint = Math.floor(validHeartRates.length / 2);
+    firstHalf = validHeartRates.slice(0, sampleMidpoint);
+    secondHalf = validHeartRates.slice(sampleMidpoint);
+  }
+  if (!firstHalf.length || !secondHalf.length) return null;
+
+  const firstHalfAverage = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+  if (firstHalfAverage <= 0) return null;
+  const secondHalfAverage = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+  const drift = ((secondHalfAverage - firstHalfAverage) / firstHalfAverage) * 100;
+
+  return {
+    first_half_avg: Math.round(firstHalfAverage),
+    second_half_avg: Math.round(secondHalfAverage),
+    drift_percent: drift.toFixed(1),
+    assessment:
+      Math.abs(drift) < 3
+        ? "Minimal drift - good aerobic fitness"
+        : drift < 5
+        ? "Normal drift"
+        : "Significant drift - may indicate dehydration or insufficient base fitness",
+  };
+}
+
+function garminMetricSeries(
+  chart: garminClient.GarminActivityChart,
+  metricKey: string
+): number[] {
+  const descriptor = chart.metricDescriptors?.find((item) => item.key === metricKey);
+  if (!descriptor) return [];
+
+  return (chart.activityDetailMetrics ?? [])
+    .map((row) => row.metrics[descriptor.metricsIndex])
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+}
+
+function garminMetricSamples(
+  chart: garminClient.GarminActivityChart,
+  metricKey: string,
+  timeKey: string
+): Array<{ value: number; time: number }> {
+  const metricDescriptor = chart.metricDescriptors?.find(
+    (item) => item.key === metricKey
+  );
+  const timeDescriptor = chart.metricDescriptors?.find(
+    (item) => item.key === timeKey
+  );
+  if (!metricDescriptor || !timeDescriptor) return [];
+
+  return (chart.activityDetailMetrics ?? [])
+    .map((row) => ({
+      value: row.metrics[metricDescriptor.metricsIndex],
+      time: row.metrics[timeDescriptor.metricsIndex],
+    }))
+    .filter(
+      (sample): sample is { value: number; time: number } =>
+        typeof sample.value === "number" &&
+        Number.isFinite(sample.value) &&
+        sample.value > 0 &&
+        typeof sample.time === "number" &&
+        Number.isFinite(sample.time)
+    );
+}
+
+async function analyzeGarminRun(activityId: number) {
+  const [activity, splits, chart] = await Promise.all([
+    garminClient.getActivityDetails(activityId),
+    garminClient.getActivitySplits(activityId),
+    garminClient.getActivityChart(activityId),
+  ]);
+  const detail = formatGarminActivityDetails(activity, splits);
+  const analysis: any = {
+    source: "garmin",
+    activity: {
+      name: detail.name,
+      date: detail.date,
+      distance_km: detail.distance_km,
+      total_time: detail.moving_duration,
+      avg_pace: detail.pace_per_km,
+      avg_heartrate: detail.avg_heartrate,
+      max_heartrate: detail.max_heartrate,
+      cadence_spm: detail.cadence_spm,
+      elevation_gain_m: detail.elevation_gain_m,
+      training_effect: detail.training_effect,
+      anaerobic_training_effect: detail.anaerobic_training_effect,
+      training_load: detail.training_load,
+    },
+  };
+
+  if (detail.laps) {
+    analysis.laps = detail.laps;
+  }
+  if (detail.split_summaries.length) {
+    analysis.split_summaries = detail.split_summaries;
+  }
+
+  const laps = splits.lapDTOs ?? [];
+  const activeLaps = hasGarminIntervalStructure(activity, laps)
+    ? laps.filter(
+        (lap) =>
+          lap.intensityType === "ACTIVE" &&
+          (lap.averageMovingSpeed ?? lap.averageSpeed) > 0
+      )
+    : [];
+  if (activeLaps.length >= 2) {
+    const paces = activeLaps.map(
+      (lap) => 1000 / (lap.averageMovingSpeed ?? lap.averageSpeed) / 60
+    );
+    const totalDistance = activeLaps.reduce((sum, lap) => sum + lap.distance, 0);
+    const totalTime = activeLaps.reduce(
+      (sum, lap) => sum + (lap.movingDuration ?? lap.duration),
+      0
+    );
+    analysis.interval_consistency = {
+      rep_count: activeLaps.length,
+      average_rep_distance_m: Math.round(totalDistance / activeLaps.length),
+      average_rep_pace: speedToPacePerKm(totalDistance / totalTime),
+      ...paceConsistency(paces),
+    };
+  }
+
+  const heartRateSamples = garminMetricSamples(
+    chart,
+    "directHeartRate",
+    "sumMovingDuration"
+  );
+  const hrDrift = heartRateDrift(
+    heartRateSamples.map((sample) => sample.value),
+    heartRateSamples.map((sample) => sample.time)
+  );
+  if (hrDrift) {
+    analysis.hr_drift = hrDrift;
+  }
+
+  const elevation = garminMetricSeries(chart, "directElevation");
+  if (elevation.length) {
+    analysis.elevation = {
+      min_m: Math.round(Math.min(...elevation)),
+      max_m: Math.round(Math.max(...elevation)),
+      total_gain: detail.elevation_gain_m,
+    };
+  }
+
+  return analysis;
+}
 
 export function registerAnalysisTools(server: McpServer): void {
   server.tool(
     "analyze_run_performance",
-    "Analyze a specific run's performance: pace consistency, HR drift, per-lap and per-km split analysis. Surfaces individual laps so interval workouts (e.g. 600m reps) show true rep pace, not just averaged 1km splits. Provide a Strava activity ID.",
+    "Analyze a Strava or Garmin run: pace consistency, HR drift, laps, and interval/recovery structure. Set source to match the tool that supplied the activity ID; Garmin IDs must use source='garmin'.",
     {
-      activity_id: z.number().describe("Strava activity ID to analyze"),
+      activity_id: z.number().describe("Activity ID from the selected source"),
+      source: z
+        .enum(["strava", "garmin"])
+        .default("strava")
+        .describe("Source that supplied the activity ID; do not use a Garmin ID as Strava"),
     },
-    async ({ activity_id }) => {
+    async ({ activity_id, source }) => {
       try {
+        if (source === "garmin") {
+          const analysis = await analyzeGarminRun(activity_id);
+          return {
+            content: [{ type: "text", text: JSON.stringify(analysis, null, 2) }],
+          };
+        }
+
         const [activity, streams] = await Promise.all([
           stravaClient.getActivityDetails(activity_id),
           stravaClient.getActivityStreams(activity_id, [
@@ -31,6 +238,7 @@ export function registerAnalysisTools(server: McpServer): void {
         }
 
         const analysis: any = {
+          source: "strava",
           activity: {
             name: activity.name,
             date: activity.start_date_local,
@@ -55,9 +263,6 @@ export function registerAnalysisTools(server: McpServer): void {
           const paces = activity.splits_metric.map(
             (s) => 1000 / s.average_speed / 60
           );
-          const avgPace = paces.reduce((a, b) => a + b, 0) / paces.length;
-          const paceVariance =
-            paces.reduce((sum, p) => sum + Math.pow(p - avgPace, 2), 0) / paces.length;
 
           analysis.splits = {
             count: activity.splits_metric.length,
@@ -66,49 +271,25 @@ export function registerAnalysisTools(server: McpServer): void {
               pace: speedToPacePerKm(s.average_speed),
               hr: s.average_heartrate ?? null,
             })),
-            pace_consistency: {
-              std_deviation_min: Math.sqrt(paceVariance).toFixed(2),
-              rating:
-                Math.sqrt(paceVariance) < 0.2
-                  ? "Excellent"
-                  : Math.sqrt(paceVariance) < 0.4
-                  ? "Good"
-                  : Math.sqrt(paceVariance) < 0.7
-                  ? "Fair"
-                  : "Variable",
-            },
+            pace_consistency: paceConsistency(paces),
           };
 
           // Negative split check
-          const mid = Math.floor(paces.length / 2);
-          const firstHalf = paces.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
-          const secondHalf = paces.slice(mid).reduce((a, b) => a + b, 0) / (paces.length - mid);
-          analysis.splits.negative_split = secondHalf < firstHalf;
+          if (paces.length >= 2) {
+            const mid = Math.floor(paces.length / 2);
+            const firstHalf = paces.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
+            const secondHalf =
+              paces.slice(mid).reduce((a, b) => a + b, 0) / (paces.length - mid);
+            analysis.splits.negative_split = secondHalf < firstHalf;
+          }
         }
 
         // HR drift analysis
         if (streamData.heartrate?.length && streamData.time?.length) {
-          const hr = streamData.heartrate;
-          const totalPoints = hr.length;
-          const firstHalfHR =
-            hr.slice(0, Math.floor(totalPoints / 2)).reduce((a, b) => a + b, 0) /
-            Math.floor(totalPoints / 2);
-          const secondHalfHR =
-            hr.slice(Math.floor(totalPoints / 2)).reduce((a, b) => a + b, 0) /
-            (totalPoints - Math.floor(totalPoints / 2));
-
-          const drift = ((secondHalfHR - firstHalfHR) / firstHalfHR) * 100;
-          analysis.hr_drift = {
-            first_half_avg: Math.round(firstHalfHR),
-            second_half_avg: Math.round(secondHalfHR),
-            drift_percent: drift.toFixed(1),
-            assessment:
-              Math.abs(drift) < 3
-                ? "Minimal drift - good aerobic fitness"
-                : drift < 5
-                ? "Normal drift"
-                : "Significant drift - may indicate dehydration or insufficient base fitness",
-          };
+          analysis.hr_drift = heartRateDrift(
+            streamData.heartrate,
+            streamData.time
+          );
         }
 
         // Elevation analysis

@@ -2,6 +2,38 @@ import { getAccessToken } from "./auth.js";
 
 const BASE_URL = "https://www.strava.com/api/v3";
 
+export function stravaApiError(status: number, body: string): Error {
+  if (
+    status === 403 &&
+    /"resource"\s*:\s*"Application"/i.test(body) &&
+    /"field"\s*:\s*"Status"/i.test(body) &&
+    /"code"\s*:\s*"Inactive"/i.test(body)
+  ) {
+    return new Error(
+      "Strava API error 403: this API application is inactive. Resolve its status at " +
+      "https://www.strava.com/settings/api, then run `npm run strava-auth` again. " +
+      "Garmin tools can still be used meanwhile."
+    );
+  }
+
+  if (
+    status === 404 &&
+    /"resource"\s*:\s*"Activity"/i.test(body) &&
+    (
+      /"code"\s*:\s*"not found"/i.test(body) ||
+      /"code"\s*:\s*"invalid"/i.test(body) ||
+      /"message"\s*:\s*"Record Not Found"/i.test(body)
+    )
+  ) {
+    return new Error(
+      "Strava API error 404: activity not found. Use an ID returned by a Strava tool, " +
+      "or call `analyze_run_performance` with source `garmin` for a Garmin activity ID."
+    );
+  }
+
+  return new Error(`Strava API error ${status}: ${body}`);
+}
+
 async function stravaFetch<T>(endpoint: string, params?: Record<string, string>): Promise<T> {
   const token = await getAccessToken();
   const url = new URL(`${BASE_URL}${endpoint}`);
@@ -15,7 +47,7 @@ async function stravaFetch<T>(endpoint: string, params?: Record<string, string>)
 
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error(`Strava API error ${resp.status}: ${body}`);
+    throw stravaApiError(resp.status, body);
   }
 
   return resp.json() as Promise<T>;
@@ -142,7 +174,7 @@ export async function createManualActivity(params: {
   });
 
   if (!resp.ok) {
-    throw new Error(`Strava API error ${resp.status}: ${await resp.text()}`);
+    throw stravaApiError(resp.status, await resp.text());
   }
   return resp.json() as Promise<StravaActivity>;
 }
@@ -162,7 +194,7 @@ export async function updateActivity(
   });
 
   if (!resp.ok) {
-    throw new Error(`Strava API error ${resp.status}: ${await resp.text()}`);
+    throw stravaApiError(resp.status, await resp.text());
   }
   return resp.json() as Promise<StravaActivity>;
 }

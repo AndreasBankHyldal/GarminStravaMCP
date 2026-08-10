@@ -93,11 +93,34 @@ npm run build
 
 ### 2. Configure credentials
 
-Copy the example env file and fill in your credentials:
+Credentials and generated state are stored outside the repository on Windows so
+OneDrive does not sync live SQLite files or authentication tokens.
+
+**Windows (PowerShell):**
+
+```powershell
+$stateDir = Join-Path $env:LOCALAPPDATA "GarminStravaMCP"
+New-Item -ItemType Directory -Force $stateDir | Out-Null
+$envFile = Join-Path $stateDir ".env"
+if (-not (Test-Path $envFile)) {
+  Copy-Item .env.example $envFile
+}
+notepad $envFile
+```
+
+**macOS/Linux:**
 
 ```bash
 cp .env.example .env
 ```
+
+On Windows the default state directory is
+`%LOCALAPPDATA%\GarminStravaMCP`; on macOS/Linux it remains the project root.
+Set `GARMIN_STRAVA_STATE_DIR` before launching the process to override the state
+directory, or `GARMIN_STRAVA_ENV_FILE` to use an explicit credential file.
+Relative `DB_PATH` values resolve from the state directory.
+Existing project-local Windows tokens or databases remain usable with a startup
+warning so upgrades do not appear to lose authentication or training plans.
 
 #### Strava Setup
 1. Go to [Strava API Settings](https://www.strava.com/settings/api) and create an application
@@ -109,7 +132,8 @@ cp .env.example .env
 npm run strava-auth
 ```
 
-This opens a browser for authorization and saves your tokens to `.strava-tokens.json`. Tokens auto-refresh on subsequent use.
+Open the displayed authorization URL in your browser. The flow saves tokens in
+the state directory, and they auto-refresh on subsequent use.
 
 #### Garmin Connect Setup
 Add your Garmin Connect credentials to `.env`:
@@ -125,13 +149,38 @@ If your Garmin account has **MFA / two-factor authentication** enabled (Garmin s
 npm run garmin-auth
 ```
 
-This logs in, prompts you for the MFA code, and caches your session to `.garmin-tokens/`. The MCP server reuses those tokens and only needs a fresh login when they expire (avoiding repeated MFA prompts). The server itself runs over stdio and **cannot** prompt for an MFA code — so if you see an MFA error from the server, run `npm run garmin-auth` and restart it.
+This logs in, prompts you for the MFA code, and caches your session in the state
+directory. The MCP server reuses those tokens and only needs a fresh login when
+they expire (avoiding repeated MFA prompts). The server itself runs over stdio
+and **cannot** prompt for an MFA code — so if you see an MFA error from the
+server, run `npm run garmin-auth` and restart it.
 
-> ⚠️ Garmin uses an unofficial API (`@gooin/garmin-connect`). Session tokens are cached in `.garmin-tokens/` to minimize logins and avoid triggering MFA on every start.
+> ⚠️ Garmin uses an unofficial API (`@gooin/garmin-connect`). Session tokens
+> are cached to minimize logins and avoid triggering MFA on every start.
 
 ### 3. Configure your MCP client
 
-#### Claude Desktop
+#### Claude Desktop on Windows
+
+Open **Settings → Developer → Edit Config**, or edit
+`%APPDATA%\Claude\claude_desktop_config.json`. Use absolute paths and escape
+backslashes in JSON:
+
+```json
+{
+  "mcpServers": {
+    "strava-garmin": {
+      "command": "C:\\FULL\\PATH\\TO\\node.exe",
+      "args": ["C:\\FULL\\PATH\\TO\\GarminStravaMCP\\dist\\index.js"]
+    }
+  }
+}
+```
+
+Completely quit and reopen Claude Desktop after saving the configuration. MCP
+logs are available under `%APPDATA%\Claude\logs` if the server does not appear.
+
+#### Claude Desktop on macOS
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -146,7 +195,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Credentials are read from the `.env` file in the project directory — no need to duplicate them in the config.
+Credentials are read from the platform-specific `.env` location described
+above — do not duplicate them in the Claude configuration.
 
 #### VS Code (Copilot)
 
@@ -181,7 +231,7 @@ Add to your `.vscode/mcp.json`:
 | Tool | Description |
 |------|-------------|
 | `garmin_get_activities` | Fetch recent Garmin activities |
-| `garmin_get_activity_details` | Get detailed Garmin activity data |
+| `garmin_get_activity_details` | Get detailed Garmin activity data with laps and interval/recovery structure |
 | `garmin_get_personal_records` | Scan up to 500 activities for all-time bests |
 | `garmin_search_activities` | Search activities with flexible filters (distance, HR, date, pace) |
 | `garmin_get_fitness_stats` | Get fitness profile and stats |
@@ -199,7 +249,7 @@ Add to your `.vscode/mcp.json`:
 
 | Tool | Description |
 |------|-------------|
-| `analyze_run_performance` | Deep analysis of a run: pace consistency, HR drift, 1km splits, and per-lap interval breakdown (true rep pace + auto interval summary) |
+| `analyze_run_performance` | Deep analysis from Strava or Garmin: pace consistency, HR drift, splits/laps, and interval breakdown |
 | `compare_activities` | Compare Strava vs Garmin data for the same activity |
 | `get_training_trends` | Weekly mileage, pace, and HR trends |
 | `race_day_strategy` | VDOT-based race pacing plan with km-by-km splits, HR targets, weather/elevation/wind adjustments, and execution pack (fueling/hydration/course tactics) |
@@ -248,7 +298,7 @@ Once connected, try asking your AI assistant:
 ```
 src/
 ├── index.ts              # Entry point, MCP server setup, resources, prompts
-├── config.ts             # Manual .env parser (avoids dotenv stdout issues)
+├── config.ts             # State paths and manual .env parser (avoids stdout issues)
 ├── utils.ts              # Shared formatting: enrichDate, pace, duration, zones, interval/lap analysis
 ├── strava/
 │   ├── auth.ts           # OAuth token management with auto-refresh
@@ -289,8 +339,15 @@ npm run garmin-auth
 ## Technical Notes
 
 - **MCP transport**: stdio (newline-delimited JSON). All non-MCP stdout is redirected to stderr to prevent protocol corruption.
-- **Strava OAuth**: Tokens saved to `.strava-tokens.json` and auto-refreshed. The `.env` file holds initial/fallback tokens only.
-- **Garmin auth**: Token-first authentication with auto-retry on 403 and a 60-second login cooldown to avoid rate limiting (429). Tokens cached in `.garmin-tokens/`.
+- **State directory**: On Windows, credentials, tokens, MFA files, and SQLite
+  data default to `%LOCALAPPDATA%\GarminStravaMCP` so they stay outside
+  OneDrive-synced source trees. macOS/Linux retain project-local state for
+  backward compatibility.
+- **Strava OAuth**: Tokens are stored in the state directory and auto-refreshed.
+  The `.env` file holds initial/fallback tokens only.
+- **Garmin auth**: Token-first authentication with auto-retry on 403 and a
+  60-second login cooldown to avoid rate limiting (429). Tokens are cached in
+  the state directory.
 - **Garmin reliability layer**: request queueing + request spacing, 429 backoff with retries, periodic token health checks, and re-auth retry on session expiry.
 - **Structured workouts**: Built using Garmin's `workoutSegments` API with `ExecutableStepDTO` and `RepeatGroupDTO` step types. Supports warmup, interval, recovery, rest, cooldown, and repeat groups with pace targets.
 - **Smart Garmin plan sync**: state tracked in `garmin_workout_sync` table so updates become delta operations (no duplicate workout spam).
@@ -298,7 +355,9 @@ npm run garmin-auth
 - **Best efforts**: rolling-distance PRs use split windows first, then stream-based interpolation fallback for accuracy.
 - **Interval/lap analysis**: reads the watch's recorded laps (not just Strava's 1km auto-splits), which is where the true rep structure lives. A workout is flagged as intervals when lap pace varies meaningfully and several laps aren't ~1km; work reps (faster than the run's average lap pace) are bucketed to the nearest 100m to absorb GPS noise and summarized as e.g. `6×600m @ 3:45/km`. Requires the run to actually contain laps (lap-button presses, auto-lap, or structured workouts) — runs with only 1km auto-laps have nothing finer to show.
 - **Readiness model**: combines Garmin recovery metrics with load balance (TSB + acute:chronic ratio) for daily training guidance.
-- **DB path**: Uses absolute paths to work correctly when launched from Claude Desktop (which has a different CWD than the project root).
+- **DB path**: Resolves to an absolute state-directory path so it works when
+  launched from Claude Desktop (which has a different CWD than the project
+  root).
 
 ## Rate Limits
 
@@ -320,13 +379,13 @@ Strava announced developer program changes in 2026 (ahead of its IPO). Status fo
 
 ## Security
 
-The `.gitignore` excludes sensitive files:
-- `.env` — API credentials
-- `.strava-tokens.json` — OAuth access/refresh tokens
-- `.garmin-tokens/` — Garmin session tokens
-- `data/` — Local SQLite database
+On Windows, keep the default state directory under `%LOCALAPPDATA%` so
+credentials, OAuth/session tokens, and the live SQLite WAL database are neither
+committed nor synchronized by OneDrive. The `.gitignore` also excludes legacy
+project-local credentials, token files, SQLite databases, and WAL/SHM sidecars
+as defense in depth.
 
-Never commit these files to version control.
+Never commit or paste credentials, OAuth tokens, session files, or MFA codes.
 
 ## License
 

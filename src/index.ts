@@ -43,7 +43,7 @@ Activities include effort level classification and heart rate zone information.
 
 Tips:
 - Use strava_get_activities or garmin_get_activities to browse recent runs
-- Use analyze_run_performance for deep analysis of a specific run
+- Use analyze_run_performance with the matching source for deep analysis of a specific run
 - Use garmin_get_personal_records to find all-time bests
 - Use garmin_search_activities to find specific activities
 - Use create_training_plan to set up a structured training schedule
@@ -180,7 +180,7 @@ server.prompt(
         type: "text",
         text: `Do a deep dive analysis of Strava activity ${activity_id}. Please:
 1. Fetch the activity details with strava_get_activity_details
-2. Analyze the run with analyze_run_performance
+2. Analyze the run with analyze_run_performance using source "strava"
 3. Get the activity streams for HR and pace data with strava_get_activity_streams
 4. Assess:
    - Pacing strategy (even splits? negative split? fade?)

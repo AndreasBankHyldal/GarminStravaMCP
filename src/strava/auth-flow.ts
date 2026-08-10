@@ -8,11 +8,8 @@
 import http from "node:http";
 import { config } from "../config.js";
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOKEN_FILE = path.resolve(__dirname, "..", "..", ".strava-tokens.json");
+const TOKEN_FILE = config.paths.stravaTokenFile;
 const PORT = 8089;
 const REDIRECT_URI = `http://localhost:${PORT}/callback`;
 
@@ -74,6 +71,7 @@ async function main() {
           expires_at: data.expires_at,
         };
 
+        fs.mkdirSync(config.paths.stateDir, { recursive: true });
         fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
 
         res.writeHead(200, { "Content-Type": "text/html" });
@@ -85,6 +83,7 @@ async function main() {
         `);
 
         console.log("✅ Authentication successful! Tokens saved to .strava-tokens.json");
+        console.log(`   Token location: ${TOKEN_FILE}`);
         console.log("   You can now start the MCP server with: npm run dev\n");
 
         setTimeout(() => process.exit(0), 500);
