@@ -1,10 +1,8 @@
 import { config } from "../config.js";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOKEN_FILE = path.resolve(__dirname, "..", "..", ".strava-tokens.json");
+const TOKEN_FILE = config.paths.stravaTokenFile;
 
 interface StravaTokens {
   access_token: string;
@@ -34,6 +32,7 @@ function loadTokens(): StravaTokens {
 
 function saveTokens(tokens: StravaTokens): void {
   cachedTokens = tokens;
+  fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true });
   fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
 }
 

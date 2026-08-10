@@ -1,13 +1,10 @@
 import GarminConnectModule from "@gooin/garmin-connect";
 import { config } from "../config.js";
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 const GarminConnect = (GarminConnectModule as any).GarminConnect ?? GarminConnectModule;
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOKEN_DIR = path.resolve(__dirname, "..", "..", ".garmin-tokens");
+const TOKEN_DIR = config.paths.garminTokenDir;
 
 let client: any = null;
 let lastLoginAttempt = 0;
@@ -139,6 +136,7 @@ export async function getGarminClient(): Promise<any> {
   const gc = new GarminConnect({
     username: config.garmin.username,
     password: config.garmin.password,
+    mfa: { type: "file", dir: config.paths.garminMfaDir },
   });
 
   // Try cached tokens first to avoid unnecessary logins
@@ -214,6 +212,7 @@ export interface GarminActivity {
   duration: number;
   movingDuration: number;
   averageSpeed: number;
+  averageMovingSpeed?: number;
   maxSpeed: number;
   averageHR: number;
   maxHR: number;
@@ -222,6 +221,77 @@ export interface GarminActivity {
   averageRunningCadenceInStepsPerMinute?: number;
   vO2MaxValue?: number;
   [key: string]: any;
+}
+
+export interface GarminActivityDetails {
+  activityId: number;
+  activityName: string;
+  activityTypeDTO: { typeKey: string };
+  metadataDTO?: {
+    lapCount?: number;
+    hasSplits?: boolean;
+    hasIntensityIntervals?: boolean;
+  };
+  summaryDTO: {
+    startTimeLocal: string;
+    distance: number;
+    duration: number;
+    movingDuration: number;
+    averageSpeed: number;
+    averageMovingSpeed?: number;
+    elevationGain: number;
+    averageHR: number;
+    maxHR: number;
+    calories: number;
+    averageRunCadence: number;
+    trainingEffect?: number;
+    anaerobicTrainingEffect?: number;
+    activityTrainingLoad?: number;
+  };
+  splitSummaries?: GarminSplitSummary[] | null;
+}
+
+export interface GarminLap {
+  lapIndex: number;
+  intensityType?: string;
+  distance: number;
+  duration: number;
+  movingDuration: number;
+  averageSpeed: number;
+  averageMovingSpeed?: number;
+  averageHR?: number;
+  maxHR?: number;
+  averageRunCadence?: number;
+  elevationGain?: number;
+}
+
+export interface GarminActivitySplits {
+  activityId: number;
+  lapDTOs?: GarminLap[];
+}
+
+export interface GarminSplitSummary {
+  splitType: string;
+  noOfSplits: number;
+  distance: number;
+  duration: number;
+  movingDuration: number;
+  averageSpeed: number;
+  averageMovingSpeed?: number;
+  averageHR?: number;
+  maxHR?: number;
+  averageRunCadence?: number;
+  elevationGain?: number;
+}
+
+export interface GarminActivityChart {
+  metricDescriptors?: Array<{
+    metricsIndex: number;
+    key: string;
+  }>;
+  activityDetailMetrics?: Array<{
+    metrics: Array<number | null>;
+  }>;
 }
 
 export async function getActivities(start = 0, limit = 20): Promise<GarminActivity[]> {
@@ -239,8 +309,20 @@ export async function getAllActivities(maxActivities = 500): Promise<GarminActiv
   return all;
 }
 
-export async function getActivityDetails(activityId: number): Promise<GarminActivity> {
+export async function getActivityDetails(activityId: number): Promise<GarminActivityDetails> {
   return withRetry(gc => gc.getActivity({ activityId }));
+}
+
+export async function getActivitySplits(activityId: number): Promise<GarminActivitySplits> {
+  return withRetry(gc => gc.get(`${gc.url.ACTIVITY}${activityId}/splits`));
+}
+
+export async function getActivityChart(activityId: number): Promise<GarminActivityChart> {
+  return withRetry(gc =>
+    gc.get(`${gc.url.ACTIVITY}${activityId}/details`, {
+      params: { maxChartSize: 2000, maxPolylineSize: 0 },
+    })
+  );
 }
 
 export async function getHeartRate(date?: Date): Promise<any> {

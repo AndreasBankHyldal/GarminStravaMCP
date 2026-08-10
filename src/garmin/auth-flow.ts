@@ -6,23 +6,20 @@
  * Garmin may require multi-factor authentication (a code sent via SMS/email/app).
  * The MCP server runs over stdio and cannot prompt for that code interactively, so
  * this script performs the login in a terminal where you CAN enter the code, then
- * caches the resulting session tokens to `.garmin-tokens/`. The server reuses those
- * cached tokens and only needs a fresh login when they expire.
+ * caches the resulting session tokens in the configured state directory. The server
+ * reuses those cached tokens and only needs a fresh login when they expire.
  */
 import GarminConnectModule from "@gooin/garmin-connect";
 import { MFAManager as MFAManagerImport } from "@gooin/garmin-connect";
 import { config } from "../config.js";
 import fs from "node:fs";
-import path from "node:path";
 import readline from "node:readline";
-import { fileURLToPath } from "node:url";
 
 const GarminConnect = (GarminConnectModule as any).GarminConnect ?? GarminConnectModule;
 const MFAManager = (MFAManagerImport as any) ?? (GarminConnectModule as any).MFAManager;
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TOKEN_DIR = path.resolve(__dirname, "..", "..", ".garmin-tokens");
-const MFA_DIR = path.resolve(__dirname, "..", "..", ".garmin-mfa");
+const TOKEN_DIR = config.paths.garminTokenDir;
+const MFA_DIR = config.paths.garminMfaDir;
 
 function prompt(question: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -97,6 +94,7 @@ async function main() {
   cleanup();
 
   console.log("\n✅ Garmin authentication successful! Tokens saved to .garmin-tokens/");
+  console.log(`   Token location: ${TOKEN_DIR}`);
   console.log("   The MCP server will reuse these tokens — no MFA needed until they expire.\n");
   process.exit(0);
 }
