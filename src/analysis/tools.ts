@@ -1,13 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { getDb } from "../db/database.js";
-import * as stravaClient from "../strava/client.js";
 import * as garminClient from "../garmin/client.js";
 import {
   formatGarminActivityDetails,
   hasGarminIntervalStructure,
 } from "../garmin/format.js";
-import { speedToPacePerKm, enrichDate, formatDuration, analyzeLaps } from "../utils.js";
+import { speedToPacePerKm, formatDuration } from "../utils.js";
 
 function paceConsistency(paces: number[]) {
   const avgPace = paces.reduce((a, b) => a + b, 0) / paces.length;
@@ -204,185 +203,15 @@ async function analyzeGarminRun(activityId: number) {
 export function registerAnalysisTools(server: McpServer): void {
   server.tool(
     "analyze_run_performance",
-    "Analyze a Strava or Garmin run: pace consistency, HR drift, laps, and interval/recovery structure. Set source to match the tool that supplied the activity ID; Garmin IDs must use source='garmin'.",
+    "Analyze a Garmin run: pace consistency, HR drift, laps, and interval/recovery structure.",
     {
-      activity_id: z.number().describe("Activity ID from the selected source"),
-      source: z
-        .enum(["strava", "garmin"])
-        .default("strava")
-        .describe("Source that supplied the activity ID; do not use a Garmin ID as Strava"),
+      activity_id: z.number().describe("Garmin activity ID"),
     },
-    async ({ activity_id, source }) => {
+    async ({ activity_id }) => {
       try {
-        if (source === "garmin") {
-          const analysis = await analyzeGarminRun(activity_id);
-          return {
-            content: [{ type: "text", text: JSON.stringify(analysis, null, 2) }],
-          };
-        }
-
-        const [activity, streams] = await Promise.all([
-          stravaClient.getActivityDetails(activity_id),
-          stravaClient.getActivityStreams(activity_id, [
-            "time",
-            "heartrate",
-            "velocity_smooth",
-            "altitude",
-            "distance",
-          ]),
-        ]);
-
-        const streamData: Record<string, number[]> = {};
-        for (const s of streams) {
-          streamData[s.type] = s.data;
-        }
-
-        const analysis: any = {
-          source: "strava",
-          activity: {
-            name: activity.name,
-            date: activity.start_date_local,
-            distance_km: (activity.distance / 1000).toFixed(2),
-            total_time: formatDuration(activity.moving_time),
-            avg_pace: speedToPacePerKm(activity.average_speed),
-            avg_heartrate: activity.average_heartrate,
-            max_heartrate: activity.max_heartrate,
-          },
-        };
-
-        // Lap analysis — essential for interval workouts. The 1km splits below
-        // average each fast rep together with its recovery, hiding the true
-        // interval pace. Laps reflect the actual structure (e.g. 600m reps).
-        const lapAnalysis = analyzeLaps(activity.laps);
-        if (lapAnalysis) {
-          analysis.laps = lapAnalysis;
-        }
-
-        // Split analysis
-        if (activity.splits_metric?.length) {
-          const paces = activity.splits_metric.map(
-            (s) => 1000 / s.average_speed / 60
-          );
-
-          analysis.splits = {
-            count: activity.splits_metric.length,
-            paces: activity.splits_metric.map((s) => ({
-              km: s.split,
-              pace: speedToPacePerKm(s.average_speed),
-              hr: s.average_heartrate ?? null,
-            })),
-            pace_consistency: paceConsistency(paces),
-          };
-
-          // Negative split check
-          if (paces.length >= 2) {
-            const mid = Math.floor(paces.length / 2);
-            const firstHalf = paces.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
-            const secondHalf =
-              paces.slice(mid).reduce((a, b) => a + b, 0) / (paces.length - mid);
-            analysis.splits.negative_split = secondHalf < firstHalf;
-          }
-        }
-
-        // HR drift analysis
-        if (streamData.heartrate?.length && streamData.time?.length) {
-          analysis.hr_drift = heartRateDrift(
-            streamData.heartrate,
-            streamData.time
-          );
-        }
-
-        // Elevation analysis
-        if (streamData.altitude?.length) {
-          const alt = streamData.altitude;
-          analysis.elevation = {
-            min_m: Math.round(Math.min(...alt)),
-            max_m: Math.round(Math.max(...alt)),
-            total_gain: activity.total_elevation_gain,
-          };
-        }
-
+        const analysis = await analyzeGarminRun(activity_id);
         return {
           content: [{ type: "text", text: JSON.stringify(analysis, null, 2) }],
-        };
-      } catch (err: any) {
-        return {
-          content: [{ type: "text", text: `Error: ${err.message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.tool(
-    "compare_activities",
-    "Compare a Strava activity with the corresponding Garmin activity by date/distance matching.",
-    {
-      strava_activity_id: z.number().describe("Strava activity ID"),
-    },
-    async ({ strava_activity_id }) => {
-      try {
-        const stravaActivity = await stravaClient.getActivityDetails(strava_activity_id);
-        const garminActivities = await garminClient.getActivities(0, 20);
-
-        // Find matching Garmin activity by date and distance proximity
-        const stravaDate = new Date(stravaActivity.start_date).getTime();
-        const stravaDist = stravaActivity.distance;
-
-        const match = garminActivities.find((ga) => {
-          const gDate = new Date(ga.startTimeLocal).getTime();
-          const timeDiff = Math.abs(gDate - stravaDate);
-          const distDiff = Math.abs((ga.distance ?? 0) - stravaDist);
-          return timeDiff < 3600000 && distDiff < 500; // within 1hr and 500m
-        });
-
-        if (!match) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "No matching Garmin activity found for this Strava activity. The activities may be outside the recent 20 activities window.",
-              },
-            ],
-          };
-        }
-
-        const comparison = {
-          strava: {
-            name: stravaActivity.name,
-            date: stravaActivity.start_date_local,
-            distance_km: (stravaActivity.distance / 1000).toFixed(2),
-            duration: formatDuration(stravaActivity.moving_time),
-            pace: speedToPacePerKm(stravaActivity.average_speed),
-            avg_hr: stravaActivity.average_heartrate,
-            max_hr: stravaActivity.max_heartrate,
-            calories: stravaActivity.calories,
-            elevation: stravaActivity.total_elevation_gain,
-          },
-          garmin: {
-            name: match.activityName,
-            date: match.startTimeLocal,
-            distance_km: ((match.distance ?? 0) / 1000).toFixed(2),
-            duration: formatDuration(match.duration ?? 0),
-            pace: speedToPacePerKm(match.averageSpeed),
-            avg_hr: match.averageHR,
-            max_hr: match.maxHR,
-            calories: match.calories,
-            elevation: match.elevationGain,
-            vo2max: match.vO2MaxValue,
-            cadence_spm: match.averageRunningCadenceInStepsPerMinute,
-          },
-          differences: {
-            distance_diff_m: Math.abs(stravaActivity.distance - (match.distance ?? 0)).toFixed(0),
-            hr_diff: stravaActivity.average_heartrate && match.averageHR
-              ? Math.abs(stravaActivity.average_heartrate - match.averageHR).toFixed(0)
-              : "N/A",
-            note: "Small differences are normal due to different GPS processing algorithms",
-          },
-        };
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(comparison, null, 2) }],
         };
       } catch (err: any) {
         return {
@@ -398,40 +227,23 @@ export function registerAnalysisTools(server: McpServer): void {
     "Get aggregated training trends over recent weeks: weekly mileage, average pace, heart rate trends.",
     {
       weeks: z.number().min(1).max(52).default(8).describe("Number of weeks to analyze"),
-      source: z.enum(["strava", "garmin"]).default("strava").describe("Data source"),
     },
-    async ({ weeks, source }) => {
+    async ({ weeks }) => {
       try {
         const afterDate = new Date();
         afterDate.setDate(afterDate.getDate() - weeks * 7);
-        const afterTs = Math.floor(afterDate.getTime() / 1000);
-
-        let activities: any[];
-
-        if (source === "strava") {
-          activities = (await stravaClient.getActivities(1, 100, afterTs)).map((a) => ({
-            date: a.start_date_local,
-            type: a.sport_type || a.type,
-            distance: a.distance,
-            duration: a.moving_time,
-            pace: a.average_speed,
-            hr: a.average_heartrate,
-            elevation: a.total_elevation_gain,
+        const garminActs = await garminClient.getAllActivities(500);
+        const activities = garminActs
+          .filter((a) => new Date(a.startTimeLocal) >= afterDate)
+          .map((a) => ({
+            date: a.startTimeLocal,
+            type: a.activityType?.typeKey ?? "unknown",
+            distance: a.distance ?? 0,
+            duration: a.duration ?? 0,
+            pace: a.averageSpeed,
+            hr: a.averageHR,
+            elevation: a.elevationGain,
           }));
-        } else {
-          const garminActs = await garminClient.getActivities(0, 100);
-          activities = garminActs
-            .filter((a) => new Date(a.startTimeLocal) >= afterDate)
-            .map((a) => ({
-              date: a.startTimeLocal,
-              type: a.activityType?.typeKey ?? "unknown",
-              distance: a.distance ?? 0,
-              duration: a.duration ?? 0,
-              pace: a.averageSpeed,
-              hr: a.averageHR,
-              elevation: a.elevationGain,
-            }));
-        }
 
         // Group by week
         const weeklyData: Record<string, any[]> = {};
@@ -489,7 +301,7 @@ export function registerAnalysisTools(server: McpServer): void {
               text: JSON.stringify(
                 {
                   period: `Last ${weeks} weeks`,
-                  source,
+                  source: "garmin",
                   weekly_breakdown: weeklyTrends,
                   volume_trend: trend,
                   total_runs: weeklyTrends.reduce((s, w) => s + w.runs, 0),
@@ -524,21 +336,23 @@ export function registerAnalysisTools(server: McpServer): void {
     async ({ race_distance_km, goal_time_minutes, elevation_gain_m, temperature_c, wind_speed_kph, course_profile }) => {
       try {
         // --- 1. Gather athlete data ---
-        const recentActivities = await stravaClient.getActivities(1, 30).catch(() => [] as stravaClient.StravaActivity[]);
+        const recentActivities = await garminClient
+          .getActivities(0, 30)
+          .catch(() => [] as garminClient.GarminActivity[]);
 
         const runs = recentActivities.filter(
-          (a) => (a.sport_type || a.type || "").toLowerCase().includes("run")
+          (a) => (a.activityType?.typeKey ?? "").toLowerCase().includes("run")
         );
 
         // --- 2. Estimate fitness from recent data ---
         const recentPaces = runs
-          .filter(a => a.average_speed > 0 && a.distance > 1000)
+          .filter(a => a.averageSpeed > 0 && a.distance > 1000)
           .map(a => ({
             distance_km: a.distance / 1000,
-            pace_sec_per_km: 1000 / a.average_speed,
-            avg_hr: a.average_heartrate,
-            max_hr: a.max_heartrate,
-            date: a.start_date_local,
+            pace_sec_per_km: 1000 / a.averageSpeed,
+            avg_hr: a.averageHR,
+            max_hr: a.maxHR,
+            date: a.startTimeLocal,
           }));
 
         const allMaxHRs = recentPaces.filter(r => r.max_hr).map(r => r.max_hr!);
@@ -701,127 +515,21 @@ export function registerAnalysisTools(server: McpServer): void {
   );
 
   server.tool(
-    "get_best_efforts",
-    "Calculate best-effort performances (1K/5K/10K/etc.) by scanning activities and using splits/streams for rolling distance windows.",
-    {
-      distances_km: z.array(z.number().min(0.2).max(100)).default([1, 5, 10, 21.1]).describe("Target distances to compute best efforts for"),
-      max_activities: z.number().min(5).max(60).default(25).describe("Number of recent runs to scan"),
-      source: z.enum(["strava", "garmin"]).default("strava").describe("Data source (stream-based best effort currently optimized for Strava)"),
-    },
-    async ({ distances_km, max_activities, source }) => {
-      try {
-        if (source === "garmin") {
-          return {
-            content: [{
-              type: "text",
-              text: "Best-effort stream scanning is currently implemented for Strava data. Use source='strava' for accurate rolling-distance PRs.",
-            }],
-          };
-        }
-
-        const activities = await stravaClient.getActivities(1, max_activities);
-        const runs = activities.filter((a) => (a.sport_type || a.type || "").toLowerCase().includes("run"));
-        const best = new Map<number, {
-          distance_km: number;
-          elapsed_seconds: number;
-          pace_per_km: string;
-          activity_id: number;
-          activity_name: string;
-          date: string;
-          source: string;
-        }>();
-
-        const sortedTargets = [...new Set(distances_km)].sort((a, b) => a - b);
-
-        for (const run of runs) {
-          const targetCandidates = sortedTargets.filter((d) => run.distance >= d * 1000);
-          if (targetCandidates.length === 0) continue;
-
-          const details = await stravaClient.getActivityDetails(run.id);
-          const bySplit = details.splits_metric ?? [];
-          let streamDistance: number[] | null = null;
-          let streamTime: number[] | null = null;
-
-          for (const targetKm of targetCandidates) {
-            const targetMeters = targetKm * 1000;
-            let effortSeconds = bestWindowFromSplits(bySplit, targetMeters);
-
-            if (effortSeconds == null) {
-              if (!streamDistance || !streamTime) {
-                const streams = await stravaClient.getActivityStreams(run.id, ["distance", "time"]);
-                streamDistance = streams.find((s) => s.type === "distance")?.data ?? null;
-                streamTime = streams.find((s) => s.type === "time")?.data ?? null;
-              }
-              effortSeconds =
-                streamDistance && streamTime
-                  ? bestWindowFromStreams(streamDistance, streamTime, targetMeters)
-                  : null;
-            }
-
-            if (effortSeconds == null) continue;
-
-            const previous = best.get(targetKm);
-            if (!previous || effortSeconds < previous.elapsed_seconds) {
-              best.set(targetKm, {
-                distance_km: targetKm,
-                elapsed_seconds: effortSeconds,
-                pace_per_km: fmtPace(effortSeconds / targetKm),
-                activity_id: run.id,
-                activity_name: run.name,
-                date: run.start_date_local,
-                source: bySplit.length > 0 ? "splits_metric" : "streams",
-              });
-            }
-          }
-        }
-
-        const efforts = sortedTargets.map((d) => best.get(d)).filter(Boolean);
-        const summary = efforts.length
-          ? `Found best efforts for ${efforts.length}/${sortedTargets.length} requested distances.`
-          : "No best efforts found. Try increasing max_activities or checking Strava permissions.";
-
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(
-              {
-                source,
-                activities_scanned: runs.length,
-                requested_distances_km: sortedTargets,
-                summary,
-                best_efforts: efforts,
-              },
-              null,
-              2
-            ),
-          }],
-        };
-      } catch (err: any) {
-        return {
-          content: [{ type: "text", text: `Error: ${err.message}` }],
-          isError: true,
-        };
-      }
-    }
-  );
-
-  server.tool(
     "get_load_fatigue_model",
     "Compute CTL/ATL/TSB-style training load model and fatigue risk from recent running activities.",
     {
-      source: z.enum(["strava", "garmin"]).default("strava").describe("Activity source"),
       days: z.number().min(21).max(180).default(90).describe("How many days to include in the model"),
     },
-    async ({ source, days }) => {
+    async ({ days }) => {
       try {
-        const runs = await fetchRunSamples(source, days);
+        const runs = await fetchRunSamples(days);
         const loadModel = computeLoadModel(runs, days);
         return {
           content: [{
             type: "text",
             text: JSON.stringify(
               {
-                source,
+                source: "garmin",
                 days,
                 runs_analyzed: runs.length,
                 model: loadModel,
@@ -843,12 +551,10 @@ export function registerAnalysisTools(server: McpServer): void {
   server.tool(
     "get_readiness_score",
     "Create a daily readiness score from recovery metrics (sleep, HRV, resting HR) and training load state.",
-    {
-      source: z.enum(["strava", "garmin", "combined"]).default("combined").describe("Primary source for training load"),
-    },
-    async ({ source }) => {
+    {},
+    async () => {
       try {
-        const runs = await fetchRunSamples(source === "garmin" ? "garmin" : "strava", 42);
+        const runs = await fetchRunSamples(42);
         const loadModel = computeLoadModel(runs, 42);
 
         const [sleepRaw, hrvRaw, hrRaw, trainingStatusRaw] = await Promise.all([
@@ -981,10 +687,9 @@ export function registerAnalysisTools(server: McpServer): void {
     "weekly_coach_brief",
     "Generate a weekly coaching brief with volume, intensity, load trend, and concrete recommendations.",
     {
-      source: z.enum(["strava", "garmin"]).default("strava").describe("Data source"),
       week_offset: z.number().min(0).max(8).default(0).describe("0 = current week, 1 = previous week, etc."),
     },
-    async ({ source, week_offset }) => {
+    async ({ week_offset }) => {
       try {
         const now = new Date();
         const weekStart = startOfWeek(now);
@@ -996,7 +701,7 @@ export function registerAnalysisTools(server: McpServer): void {
         prevWeekStart.setDate(prevWeekStart.getDate() - 7);
         const prevWeekEnd = new Date(weekStart);
 
-        const runs = await fetchRunSamples(source, 35);
+        const runs = await fetchRunSamples(35);
         const thisWeek = runs.filter((r) => {
           const d = new Date(r.date);
           return d >= weekStart && d < weekEnd;
@@ -1053,7 +758,7 @@ export function registerAnalysisTools(server: McpServer): void {
                 period: {
                   start: weekStart.toISOString().slice(0, 10),
                   end_exclusive: weekEnd.toISOString().slice(0, 10),
-                  source,
+                  source: "garmin",
                 },
                 this_week: thisSummary,
                 previous_week: prevSummary,
@@ -1326,24 +1031,9 @@ type RunSample = {
   name?: string;
 };
 
-async function fetchRunSamples(source: "strava" | "garmin", days: number): Promise<RunSample[]> {
+async function fetchRunSamples(days: number): Promise<RunSample[]> {
   const afterDate = new Date();
   afterDate.setDate(afterDate.getDate() - days);
-
-  if (source === "strava") {
-    const afterTs = Math.floor(afterDate.getTime() / 1000);
-    const acts = await stravaClient.getActivities(1, 200, afterTs);
-    return acts
-      .filter((a) => (a.sport_type || a.type || "").toLowerCase().includes("run"))
-      .map((a) => ({
-        date: a.start_date_local,
-        distance_m: a.distance,
-        duration_s: a.moving_time,
-        avg_hr: a.average_heartrate ?? null,
-        max_hr: a.max_heartrate ?? null,
-        name: a.name,
-      }));
-  }
 
   const acts = await garminClient.getAllActivities(500);
   return acts
@@ -1508,74 +1198,4 @@ function summarizeRunBlock(runs: RunSample[]): {
 
 function isPlannedRun(type: string): boolean {
   return ["easy_run", "long_run", "tempo", "intervals", "recovery", "race"].includes(type);
-}
-
-function bestWindowFromSplits(
-  splits: { distance: number; moving_time: number }[] | undefined,
-  targetMeters: number
-): number | null {
-  if (!splits || splits.length === 0) return null;
-  let best: number | null = null;
-
-  for (let i = 0; i < splits.length; i++) {
-    let dist = 0;
-    let time = 0;
-    for (let j = i; j < splits.length; j++) {
-      const segDist = splits[j].distance;
-      const segTime = splits[j].moving_time;
-      if (dist + segDist >= targetMeters) {
-        const remain = targetMeters - dist;
-        const ratio = segDist > 0 ? remain / segDist : 0;
-        time += segTime * ratio;
-        best = best == null ? time : Math.min(best, time);
-        break;
-      }
-      dist += segDist;
-      time += segTime;
-    }
-  }
-  return best;
-}
-
-function bestWindowFromStreams(
-  distance: number[],
-  time: number[],
-  targetMeters: number
-): number | null {
-  if (!distance.length || !time.length || distance.length !== time.length) return null;
-  let best: number | null = null;
-  let j = 0;
-
-  for (let i = 0; i < distance.length; i++) {
-    const startDist = distance[i];
-    const startTime = time[i];
-    const goalDist = startDist + targetMeters;
-
-    while (j < distance.length && distance[j] < goalDist) j++;
-    if (j >= distance.length) break;
-
-    const endTime = interpolateTimeAtDistance(distance, time, j, goalDist);
-    if (endTime == null) continue;
-    const elapsed = endTime - startTime;
-    if (elapsed <= 0) continue;
-    best = best == null ? elapsed : Math.min(best, elapsed);
-  }
-
-  return best;
-}
-
-function interpolateTimeAtDistance(
-  distance: number[],
-  time: number[],
-  idx: number,
-  targetDist: number
-): number | null {
-  if (idx <= 0 || idx >= distance.length) return null;
-  const d1 = distance[idx - 1];
-  const d2 = distance[idx];
-  const t1 = time[idx - 1];
-  const t2 = time[idx];
-  if (d2 <= d1) return t2;
-  const ratio = (targetDist - d1) / (d2 - d1);
-  return t1 + (t2 - t1) * ratio;
 }

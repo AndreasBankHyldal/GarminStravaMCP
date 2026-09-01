@@ -2,7 +2,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { config } from "../config.js";
 import * as garminClient from "../garmin/client.js";
-import * as stravaClient from "../strava/client.js";
 import { speedToPacePerKm } from "../utils.js";
 import {
   classifyCompletedCyclePhase,
@@ -82,7 +81,7 @@ export function registerWomenTools(server: McpServer): void {
           success: true,
           profile,
           privacy:
-            "Stored locally. Reproductive-health data is not sent to Strava or Garmin by this tool.",
+            "Stored locally. Reproductive-health data is not sent to Garmin by this tool.",
         });
       } catch (error) {
         return errorResult(error);
@@ -437,11 +436,10 @@ export function registerWomenTools(server: McpServer): void {
     "women_analyze_cycle_training_patterns",
     "Compare the athlete's own activity and symptom patterns across estimated phases in completed cycles. Requires repeated personal data and never assumes causation.",
     {
-      source: z.enum(["garmin", "strava"]).default("garmin"),
       sport_type: z.string().min(1).max(50).default("run"),
       max_activities: z.number().int().min(20).max(500).default(300),
     },
-    async ({ source, sport_type, max_activities }) => {
+    async ({ sport_type, max_activities }) => {
       try {
         const periodStarts = getPeriodStartDates();
         if (periodStarts.length < 3) {
@@ -469,7 +467,6 @@ export function registerWomenTools(server: McpServer): void {
         const startDate = periodStarts[0];
         const endDate = periodStarts[periodStarts.length - 1];
         const activities = await fetchActivitySamples(
-          source,
           sport_type,
           max_activities,
           startDate,
@@ -485,7 +482,7 @@ export function registerWomenTools(server: McpServer): void {
         );
         return jsonResult({
           status: "descriptive_only",
-          source,
+          source: "garmin",
           sport_type,
           completed_cycles: periodStarts.length - 1,
           activities_analyzed: activities.length,
@@ -579,59 +576,27 @@ interface ActivitySample {
 }
 
 async function fetchActivitySamples(
-  source: "garmin" | "strava",
   sportType: string,
   maxActivities: number,
   startDate: string,
   endDate: string
 ): Promise<ActivitySample[]> {
   const sport = sportType.toLowerCase();
-  if (source === "garmin") {
-    const activities = await garminClient.getAllActivities(maxActivities);
-    return activities
-      .filter((activity) => {
-        const date = toDateKey(activity.startTimeLocal);
-        return (
-          date >= startDate &&
-          date < endDate &&
-          (activity.activityType?.typeKey ?? "").toLowerCase().includes(sport)
-        );
-      })
-      .map((activity) => ({
-        date: toDateKey(activity.startTimeLocal),
-        distance_m: activity.distance ?? 0,
-        duration_s: activity.movingDuration ?? activity.duration ?? 0,
-        avg_hr: activity.averageHR ?? null,
-      }));
-  }
-
-  const after = Math.floor(
-    new Date(`${startDate}T00:00:00Z`).getTime() / 1000
-  );
-  const before = Math.floor(
-    new Date(`${endDate}T00:00:00Z`).getTime() / 1000
-  );
-  const activities: stravaClient.StravaActivity[] = [];
-  for (let page = 1; activities.length < maxActivities; page++) {
-    const pageSize = Math.min(200, maxActivities - activities.length);
-    const batch = await stravaClient.getActivities(
-      page,
-      pageSize,
-      after,
-      before
-    );
-    activities.push(...batch);
-    if (batch.length < pageSize) break;
-  }
+  const activities = await garminClient.getAllActivities(maxActivities);
   return activities
-    .filter((activity) =>
-      (activity.sport_type || activity.type || "").toLowerCase().includes(sport)
-    )
+    .filter((activity) => {
+      const date = toDateKey(activity.startTimeLocal);
+      return (
+        date >= startDate &&
+        date < endDate &&
+        (activity.activityType?.typeKey ?? "").toLowerCase().includes(sport)
+      );
+    })
     .map((activity) => ({
-      date: toDateKey(activity.start_date_local),
+      date: toDateKey(activity.startTimeLocal),
       distance_m: activity.distance ?? 0,
-      duration_s: activity.moving_time ?? 0,
-      avg_hr: activity.average_heartrate ?? null,
+      duration_s: activity.movingDuration ?? activity.duration ?? 0,
+      avg_hr: activity.averageHR ?? null,
     }));
 }
 

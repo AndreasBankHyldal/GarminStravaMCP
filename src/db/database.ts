@@ -22,23 +22,6 @@ export function getDb(): Database.Database {
 
 function runMigrations(db: Database.Database): void {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS activity_cache (
-      id TEXT PRIMARY KEY,
-      source TEXT NOT NULL CHECK(source IN ('strava', 'garmin')),
-      name TEXT,
-      type TEXT,
-      start_date TEXT,
-      distance_meters REAL,
-      duration_seconds REAL,
-      avg_pace_per_km REAL,
-      avg_heartrate REAL,
-      max_heartrate REAL,
-      elevation_gain REAL,
-      calories REAL,
-      raw_json TEXT,
-      fetched_at TEXT DEFAULT (datetime('now'))
-    );
-
     CREATE TABLE IF NOT EXISTS training_plans (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -133,8 +116,6 @@ function runMigrations(db: Database.Database): void {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
-    CREATE INDEX IF NOT EXISTS idx_activity_cache_source ON activity_cache(source);
-    CREATE INDEX IF NOT EXISTS idx_activity_cache_date ON activity_cache(start_date);
     CREATE INDEX IF NOT EXISTS idx_planned_workouts_plan ON planned_workouts(plan_id);
     CREATE INDEX IF NOT EXISTS idx_planned_workouts_date ON planned_workouts(date);
     CREATE INDEX IF NOT EXISTS idx_garmin_sync_plan ON garmin_workout_sync(plan_id);

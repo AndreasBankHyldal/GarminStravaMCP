@@ -6,24 +6,47 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 
 // Load .env manually to avoid dotenv printing to stdout (breaks MCP stdio)
-const defaultStateDir =
+const preferredStateDir =
+  process.platform === "win32" && process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, "GarminMCP")
+    : projectRoot;
+const legacyStateDir =
   process.platform === "win32" && process.env.LOCALAPPDATA
     ? path.join(process.env.LOCALAPPDATA, "GarminStravaMCP")
-    : projectRoot;
+    : null;
+
+function resolveDefaultStateDir(): string {
+  if (
+    legacyStateDir &&
+    !fs.existsSync(preferredStateDir) &&
+    fs.existsSync(legacyStateDir)
+  ) {
+    console.error(
+      `Using legacy state directory at ${legacyStateDir}. ` +
+      `Move it to ${preferredStateDir} when convenient.`
+    );
+    return legacyStateDir;
+  }
+  return preferredStateDir;
+}
 
 function resolveProjectPath(value: string): string {
   return path.isAbsolute(value) ? value : path.resolve(projectRoot, value);
 }
 
 function resolveStateDir(): string {
-  return process.env.GARMIN_STRAVA_STATE_DIR
-    ? resolveProjectPath(process.env.GARMIN_STRAVA_STATE_DIR)
-    : defaultStateDir;
+  const configuredStateDir =
+    process.env.GARMIN_STATE_DIR ?? process.env.GARMIN_STRAVA_STATE_DIR;
+  return configuredStateDir
+    ? resolveProjectPath(configuredStateDir)
+    : resolveDefaultStateDir();
 }
 
 const initialStateDir = resolveStateDir();
-const explicitEnvPath = process.env.GARMIN_STRAVA_ENV_FILE
-  ? resolveProjectPath(process.env.GARMIN_STRAVA_ENV_FILE)
+const configuredEnvPath =
+  process.env.GARMIN_ENV_FILE ?? process.env.GARMIN_STRAVA_ENV_FILE;
+const explicitEnvPath = configuredEnvPath
+  ? resolveProjectPath(configuredEnvPath)
   : null;
 const stateEnvPath = path.join(initialStateDir, ".env");
 const legacyEnvPath = path.join(projectRoot, ".env");
@@ -81,15 +104,8 @@ export const config = {
     projectRoot,
     stateDir,
     envFile: envPath,
-    stravaTokenFile: resolveStateArtifact(".strava-tokens.json"),
     garminTokenDir: resolveStateArtifact(".garmin-tokens"),
     garminMfaDir: path.join(stateDir, ".garmin-mfa"),
-  },
-  strava: {
-    clientId: process.env.STRAVA_CLIENT_ID ?? "",
-    clientSecret: process.env.STRAVA_CLIENT_SECRET ?? "",
-    accessToken: process.env.STRAVA_ACCESS_TOKEN ?? "",
-    refreshToken: process.env.STRAVA_REFRESH_TOKEN ?? "",
   },
   women: {
     toolsEnabled:

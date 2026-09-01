@@ -110,8 +110,7 @@ response schema, and may carry Garmin terms-of-use risk. The implementation:
 
 General recovery signals use the same unofficial Garmin session. Every returned
 field includes source context, and missing data is reported rather than
-invented. Strava supplies activities only; it cannot supply menstrual data,
-sleep, HRV, stress, Body Battery, or training readiness.
+invented. Cycle-pattern comparisons use Garmin activities.
 
 ## Cycle estimates
 

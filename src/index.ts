@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { registerStravaTools } from "./strava/tools.js";
 import { registerGarminTools } from "./garmin/tools.js";
 import { registerAnalysisTools } from "./analysis/tools.js";
 import { registerPlanningTools } from "./planning/tools.js";
@@ -25,29 +24,26 @@ const womenTips = config.women.toolsEnabled
   : "";
 
 const server = new McpServer(
-  { name: "strava-garmin-mcp", version: "1.0.0" },
+  { name: "garmin-connect-mcp", version: "1.0.0" },
   {
     capabilities: {
       tools: {},
       resources: {},
       prompts: {},
     },
-    instructions: `This MCP server integrates with Strava and Garmin Connect to help with running training.
+    instructions: `This MCP server integrates with Garmin Connect to help with running training.
 
 Available capabilities:
-- Fetch and browse activities from Strava and Garmin Connect
+- Fetch and browse activities from Garmin Connect
 - Get detailed activity data including splits, laps, heart rate, and pace
 - Analyze run performance (pace consistency, HR drift, elevation)
-- Compare data between Strava and Garmin for the same activity
 - View training trends over weeks/months
 - Create and manage training plans with planned workouts
 - Check training plan compliance against actual activities
 - Access Garmin fitness stats (VO2max, sleep, heart rate, steps)
 - Create workouts on Garmin Connect (syncs to your watch)
-- Create and edit activities on Strava
 - Search all activities and find personal records
 - Read configured Garmin heart rate zones and thresholds
-- Calculate rolling best efforts (1K/5K/10K/etc.) from streams/splits
 - Compute training load and fatigue model (CTL/ATL/TSB style)
 - Produce a daily readiness score from sleep/HRV/HR/load
 - Generate weekly coach brief with trend-based recommendations
@@ -58,8 +54,8 @@ All dates include day-of-week and human-readable format to avoid temporal confus
 Activities include effort level classification and heart rate zone information.
 
 Tips:
-- Use strava_get_activities or garmin_get_activities to browse recent runs
-- Use analyze_run_performance with the matching source for deep analysis of a specific run
+- Use garmin_get_activities to browse recent runs
+- Use analyze_run_performance for deep analysis of a Garmin activity
 - Use garmin_get_personal_records to find all-time bests
 - Use garmin_search_activities to find specific activities
 - Use garmin_get_heart_rate_zones before making heart-rate-based training recommendations
@@ -70,59 +66,6 @@ Tips:
 );
 
 // --- Resources: always-available context ---
-
-server.resource(
-  "athlete-profile",
-  "strava://athlete/profile",
-  { description: "Athlete profile and stats from Strava (totals, year-to-date, all-time)" },
-  async () => {
-    try {
-      const { getAthleteStats } = await import("./strava/client.js");
-      const stats = await getAthleteStats();
-      return {
-        contents: [{
-          uri: "strava://athlete/profile",
-          mimeType: "application/json",
-          text: JSON.stringify({
-            measurement_preference: "metric",
-            pace_unit: "min/km",
-            distance_unit: "km",
-            recent_runs: {
-              count: stats.recent_run_totals.count,
-              distance_km: +(stats.recent_run_totals.distance / 1000).toFixed(1),
-              moving_time_hours: +(stats.recent_run_totals.moving_time / 3600).toFixed(1),
-            },
-            ytd_runs: {
-              count: stats.ytd_run_totals.count,
-              distance_km: +(stats.ytd_run_totals.distance / 1000).toFixed(1),
-              moving_time_hours: +(stats.ytd_run_totals.moving_time / 3600).toFixed(1),
-            },
-            all_time_runs: {
-              count: stats.all_run_totals.count,
-              distance_km: +(stats.all_run_totals.distance / 1000).toFixed(1),
-              moving_time_hours: +(stats.all_run_totals.moving_time / 3600).toFixed(1),
-            },
-            hr_zones_generic: {
-              zone1: "< 60% max HR (Recovery)",
-              zone2: "60-70% max HR (Easy/Aerobic)",
-              zone3: "70-80% max HR (Tempo)",
-              zone4: "80-90% max HR (Threshold)",
-              zone5: "> 90% max HR (VO2max)",
-            },
-          }, null, 2),
-        }],
-      };
-    } catch {
-      return {
-        contents: [{
-          uri: "strava://athlete/profile",
-          mimeType: "text/plain",
-          text: "Strava not connected. Run 'npm run strava-auth' to authenticate.",
-        }],
-      };
-    }
-  }
-);
 
 server.resource(
   "garmin-health",
@@ -173,7 +116,7 @@ server.prompt(
       content: {
         type: "text",
         text: `Analyze my training over the last ${weeks ?? "4"} weeks. Please:
-1. Fetch my recent activities from Strava using strava_get_activities
+1. Fetch my recent activities from Garmin using garmin_get_activities
 2. Calculate weekly mileage trends using get_training_trends
 3. Identify my hardest and easiest sessions
 4. Look for patterns (are certain days harder? is mileage increasing?)
@@ -189,23 +132,22 @@ Present the analysis in a clear, structured format with a weekly summary table.`
 server.prompt(
   "activity-deep-dive",
   "Deep dive into a specific activity with splits, HR analysis, and performance context.",
-  { activity_id: z.string().describe("Strava activity ID to analyze") },
+  { activity_id: z.string().describe("Garmin activity ID to analyze") },
   ({ activity_id }) => ({
     messages: [{
       role: "user",
       content: {
         type: "text",
-        text: `Do a deep dive analysis of Strava activity ${activity_id}. Please:
-1. Fetch the activity details with strava_get_activity_details
-2. Analyze the run with analyze_run_performance using source "strava"
-3. Get the activity streams for HR and pace data with strava_get_activity_streams
-4. Assess:
+        text: `Do a deep dive analysis of Garmin activity ${activity_id}. Please:
+1. Fetch the activity details with garmin_get_activity_details
+2. Analyze the run with analyze_run_performance
+3. Assess:
    - Pacing strategy (even splits? negative split? fade?)
    - Heart rate drift and what it indicates about fitness/fatigue
    - Effort level relative to the workout type
    - Any notable patterns in the data
-5. Compare to similar recent workouts if possible
-6. Rate the overall execution of this run and suggest what to focus on next`,
+4. Compare to similar recent workouts if possible
+5. Rate the overall execution of this run and suggest what to focus on next`,
       },
     }],
   })
@@ -221,7 +163,7 @@ server.prompt(
       content: {
         type: "text",
         text: `Check my training readiness for today. Please:
-1. Fetch my last 7 days of activities from Strava (strava_get_activities, count 10)
+1. Fetch my last 7 days of activities from Garmin (garmin_get_activities, count 10)
 2. Check my Garmin sleep data (garmin_get_sleep) and heart rate (garmin_get_heart_rate)
 3. Try to get training status from Garmin (garmin_get_training_status)
 4. Assess:
@@ -246,7 +188,7 @@ server.prompt(
       content: {
         type: "text",
         text: `Compare my last ${count ?? "5"} runs. Please:
-1. Fetch recent activities from Strava (strava_get_activities)
+1. Fetch recent activities from Garmin (garmin_get_activities)
 2. For each run, note: distance, pace, heart rate, effort level
 3. Look for:
    - Pace improvements or declines
@@ -304,7 +246,7 @@ server.prompt(
         type: "text",
         text: `Help me plan for a ${race_distance} race on ${race_date}${goal_time ? ` with a goal time of ${goal_time}` : ""}.
 
-1. First, check my recent training with strava_get_activities and get_training_trends to understand my current fitness
+1. First, check my recent training with garmin_get_activities and get_training_trends to understand my current fitness
 2. Based on my current ability, assess whether the goal is realistic
 3. Create a structured training plan using create_training_plan with:
    - Appropriate weekly mileage progression (no more than 10% increase/week)
@@ -320,7 +262,6 @@ server.prompt(
 
 // --- Register all tools ---
 
-registerStravaTools(server);
 registerGarminTools(server);
 registerAnalysisTools(server);
 registerPlanningTools(server);
@@ -328,4 +269,4 @@ registerWomenTools(server);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error("MCP Strava/Garmin server running on stdio");
+console.error("Garmin Connect MCP server running on stdio");
