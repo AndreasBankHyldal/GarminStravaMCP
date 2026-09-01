@@ -32,6 +32,17 @@ An MCP (Model Context Protocol) server that integrates with **Strava** and **Gar
 - **Race day strategy** — VDOT-based pacing plan with km-by-km splits, HR targets, weather/elevation/wind adjustments, fueling/hydration plan, and course tactics
 - Pre-computed effort levels and HR zone classification on all activities
 
+### Women's Training & Menstrual Health
+- Symptom-led training context using local logs plus Garmin sleep/need, HRV, resting HR, Body Battery change, load/recovery, hydration, weight, VO2max, respiration, Pulse Ox, and skin temperature when available
+- Probabilistic cycle context that explicitly avoids universal phase-based training rules
+- Personal pattern comparison across completed cycles
+- Workload-based carbohydrate, protein, recovery, and hydration targets
+- Non-diagnostic energy-availability, RED-S, iron, bleeding, pregnancy, and bone-health guardrails
+- Sensitive Garmin menstrual/pregnancy reads behind a separate, disabled-by-default opt-in
+
+See [Women's Training and Menstrual-Health Tools](docs/womens-training.md)
+for the research basis, limitations, privacy model, and references.
+
 ### 📋 Training Plans
 - Create multi-week training plans stored locally (SQLite)
 - **Smart Garmin sync (delta sync)** — create/update/reschedule/remove workouts without duplicates
@@ -142,6 +153,24 @@ Add your Garmin Connect credentials to `.env`:
 GARMIN_USERNAME=your.email@example.com
 GARMIN_PASSWORD=your_password
 ```
+
+All women-specific tools, prompts, and server guidance are disabled by default,
+so the standard MCP experience is unchanged. Enable them with:
+
+```env
+I_AM_WOMAN=true
+```
+
+Garmin reproductive-health reads require a second opt-in because they use
+undocumented consumer endpoints. After reviewing the privacy and API limitations
+in [the women's training documentation](docs/womens-training.md), enable both:
+
+```env
+I_AM_WOMAN=true
+GARMIN_WOMENS_HEALTH_ENABLED=true
+```
+
+Restart the MCP server after changing either setting.
 
 If your Garmin account has **MFA / two-factor authentication** enabled (Garmin sends a code via SMS/email/app), run the one-time interactive login so you can enter that code:
 
@@ -259,6 +288,30 @@ Add to your `.vscode/mcp.json`:
 | `get_readiness_score` | Daily readiness score from sleep, HRV, resting HR, and load balance |
 | `weekly_coach_brief` | Weekly summary with trend deltas, adherence snapshot, and coaching notes |
 
+### Women's Training & Menstrual Health
+
+This entire tool group is registered only when `I_AM_WOMAN=true`.
+
+| Tool | Description |
+|------|-------------|
+| `women_set_health_profile` | Store life stage, contraception context, and usual cycle details locally |
+| `women_log_daily_health` | Log period events, symptoms, subjective recovery, and session response |
+| `women_delete_cycle_event` | Correct a locally recorded cycle event |
+| `women_get_cycle_context` | Probabilistic calendar context with explicit uncertainty and no phase-only training rule |
+| `garmin_get_recovery_snapshot` | Garmin sleep/need, HRV, HR, Body Battery change, load/recovery, hydration, weight, VO2max, respiration, Pulse Ox, and skin temperature |
+| `garmin_get_extended_wellness` | Raw Body Battery and all-day stress data with unavailable fields reported |
+| `women_get_training_context` | Symptom-led training estimate combining local logs and Garmin recovery |
+| `women_get_nutrition_targets` | Evidence-based fueling/hydration ranges based on workload and session duration |
+| `women_estimate_energy_availability` | Uncertainty-aware educational EA estimate; not a RED-S diagnosis |
+| `women_screen_training_health` | Educational triage for menstrual, iron, bone, pregnancy, and under-fueling concerns |
+| `women_analyze_cycle_training_patterns` | Descriptive within-athlete comparisons across completed cycles |
+
+With both `I_AM_WOMAN=true` and `GARMIN_WOMENS_HEALTH_ENABLED=true`, the server also registers
+`garmin_get_menstrual_day`, `garmin_get_menstrual_calendar`, and
+`garmin_get_pregnancy_summary`. Garmin does not publish the private response
+schema, so these tools return opaque JSON and unverified date candidates rather
+than inventing period-start fields.
+
 ### Training Plans
 
 | Tool | Description |
@@ -357,6 +410,8 @@ npm run garmin-auth
 - **Best efforts**: rolling-distance PRs use split windows first, then stream-based interpolation fallback for accuracy.
 - **Interval/lap analysis**: reads the watch's recorded laps (not just Strava's 1km auto-splits), which is where the true rep structure lives. A workout is flagged as intervals when lap pace varies meaningfully and several laps aren't ~1km; work reps (faster than the run's average lap pace) are bucketed to the nearest 100m to absorb GPS noise and summarized as e.g. `6×600m @ 3:45/km`. Requires the run to actually contain laps (lap-button presses, auto-lap, or structured workouts) — runs with only 1km auto-laps have nothing finer to show.
 - **Readiness model**: combines Garmin recovery metrics with load balance (TSB + acute:chronic ratio) for daily training guidance.
+- **Women's training model**: current symptoms and personal recovery trends take priority over estimated menstrual phase. Calendar estimates never reach high confidence and never change training by themselves.
+- **Reproductive-health privacy**: local cycle logs remain in SQLite. Optional Garmin menstrual/pregnancy reads are separately gated, read-only, and never auto-import undocumented response fields.
 - **DB path**: Resolves to an absolute state-directory path so it works when
   launched from Claude Desktop (which has a different CWD than the project
   root).

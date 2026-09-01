@@ -91,9 +91,15 @@ export const config = {
     accessToken: process.env.STRAVA_ACCESS_TOKEN ?? "",
     refreshToken: process.env.STRAVA_REFRESH_TOKEN ?? "",
   },
+  women: {
+    toolsEnabled:
+      process.env.I_AM_WOMAN?.trim().toLowerCase() === "true",
+  },
   garmin: {
     username: process.env.GARMIN_USERNAME ?? "",
     password: process.env.GARMIN_PASSWORD ?? "",
+    womenHealthEnabled:
+      process.env.GARMIN_WOMENS_HEALTH_ENABLED?.trim().toLowerCase() === "true",
   },
   dbPath,
 };

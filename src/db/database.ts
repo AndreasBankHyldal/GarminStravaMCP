@@ -75,10 +75,70 @@ function runMigrations(db: Database.Database): void {
       synced_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS women_health_profile (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      life_stage TEXT NOT NULL CHECK(life_stage IN (
+        'naturally_cycling',
+        'hormonal_contraception',
+        'perimenopause',
+        'postmenopause',
+        'pregnant',
+        'postpartum',
+        'unknown'
+      )),
+      contraception_type TEXT,
+      typical_cycle_length_days INTEGER,
+      typical_period_length_days INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS women_cycle_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_date TEXT NOT NULL,
+      event_type TEXT NOT NULL CHECK(event_type IN (
+        'period_start',
+        'period_end',
+        'positive_lh_test'
+      )),
+      source TEXT NOT NULL CHECK(source IN ('user_input', 'garmin_unofficial_api')),
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(event_date, event_type, source)
+    );
+
+    CREATE TABLE IF NOT EXISTS women_daily_logs (
+      date TEXT PRIMARY KEY,
+      period_flow TEXT CHECK(period_flow IN (
+        'none',
+        'spotting',
+        'light',
+        'moderate',
+        'heavy',
+        'very_heavy'
+      )),
+      symptoms_json TEXT NOT NULL DEFAULT '[]',
+      overall_symptom_severity INTEGER CHECK(overall_symptom_severity BETWEEN 0 AND 10),
+      energy INTEGER CHECK(energy BETWEEN 1 AND 5),
+      fatigue INTEGER CHECK(fatigue BETWEEN 1 AND 5),
+      soreness INTEGER CHECK(soreness BETWEEN 1 AND 5),
+      sleep_quality INTEGER CHECK(sleep_quality BETWEEN 1 AND 5),
+      stress INTEGER CHECK(stress BETWEEN 1 AND 5),
+      motivation INTEGER CHECK(motivation BETWEEN 1 AND 5),
+      perceived_performance INTEGER CHECK(perceived_performance BETWEEN 1 AND 5),
+      session_rpe REAL CHECK(session_rpe BETWEEN 0 AND 10),
+      notes TEXT,
+      source TEXT NOT NULL DEFAULT 'user_input' CHECK(source = 'user_input'),
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_activity_cache_source ON activity_cache(source);
     CREATE INDEX IF NOT EXISTS idx_activity_cache_date ON activity_cache(start_date);
     CREATE INDEX IF NOT EXISTS idx_planned_workouts_plan ON planned_workouts(plan_id);
     CREATE INDEX IF NOT EXISTS idx_planned_workouts_date ON planned_workouts(date);
     CREATE INDEX IF NOT EXISTS idx_garmin_sync_plan ON garmin_workout_sync(plan_id);
+    CREATE INDEX IF NOT EXISTS idx_women_cycle_event_date ON women_cycle_events(event_date);
+    CREATE INDEX IF NOT EXISTS idx_women_daily_log_date ON women_daily_logs(date);
   `);
 }

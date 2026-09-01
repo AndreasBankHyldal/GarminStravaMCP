@@ -353,6 +353,13 @@ export async function getSleepData(date?: Date): Promise<any> {
   return withRetry(gc => gc.getSleepData(date));
 }
 
+export async function getSleepDailySummary(
+  startDate: Date,
+  endDate: Date
+): Promise<any> {
+  return withRetry(gc => gc.getSleepDailySummary(startDate, endDate));
+}
+
 export async function getSteps(date?: Date): Promise<number> {
   return withRetry(gc => gc.getSteps(date));
 }
@@ -363,6 +370,10 @@ export async function getUserProfile(): Promise<any> {
 
 export async function getUserSettings(): Promise<any> {
   return withRetry(gc => gc.getUserSettings());
+}
+
+export async function getPersonalInfo(): Promise<any> {
+  return withRetry(gc => gc.getPersonalInfo());
 }
 
 export async function getWorkouts(start = 0, limit = 20): Promise<any[]> {
@@ -606,6 +617,84 @@ export async function getTrainingStatus(date?: Date): Promise<any> {
   return withRetry(gc => gc.getTrainingStatus(date));
 }
 
+export async function getTrainingLoadBalance(date?: Date): Promise<any> {
+  return withRetry(gc => gc.getTrainingLoadBalance(date));
+}
+
 export async function getHRVData(date?: Date): Promise<any> {
   return withRetry(gc => gc.getHRVData(date));
+}
+
+export async function getDailyWeightData(date?: Date): Promise<any> {
+  return withRetry(gc => gc.getDailyWeightData(date));
+}
+
+export async function getDailyHydration(date?: Date): Promise<number> {
+  return withRetry(gc => gc.getDailyHydration(date));
+}
+
+export async function getBodyBattery(startDate: Date, endDate = startDate): Promise<unknown> {
+  return withRetry(gc =>
+    gc.get(`${gc.url.GC_API}/wellness-service/wellness/bodyBattery/reports/daily`, {
+      params: {
+        startDate: toGarminDate(startDate),
+        endDate: toGarminDate(endDate),
+      },
+    })
+  );
+}
+
+export async function getAllDayStress(date: Date): Promise<unknown> {
+  return withRetry(gc =>
+    gc.get(
+      `${gc.url.GC_API}/wellness-service/wellness/dailyStress/${toGarminDate(date)}`
+    )
+  );
+}
+
+export async function getMenstrualDataForDate(date: Date): Promise<unknown> {
+  requireWomenHealthOptIn();
+  return withRetry(gc =>
+    gc.get(
+      `${gc.url.GC_API}/periodichealth-service/menstrualcycle/dayview/${toGarminDate(date)}`
+    )
+  );
+}
+
+export async function getMenstrualCalendarData(
+  startDate: Date,
+  endDate: Date
+): Promise<unknown> {
+  requireWomenHealthOptIn();
+  return withRetry(gc =>
+    gc.get(
+      `${gc.url.GC_API}/periodichealth-service/menstrualcycle/calendar/` +
+      `${toGarminDate(startDate)}/${toGarminDate(endDate)}`
+    )
+  );
+}
+
+export async function getPregnancySummary(): Promise<unknown> {
+  requireWomenHealthOptIn();
+  return withRetry(gc =>
+    gc.get(
+      `${gc.url.GC_API}/periodichealth-service/menstrualcycle/pregnancysnapshot`
+    )
+  );
+}
+
+function toGarminDate(date: Date): string {
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Invalid date supplied to Garmin.");
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function requireWomenHealthOptIn(): void {
+  if (!config.garmin.womenHealthEnabled) {
+    throw new Error(
+      "Garmin women's-health access is disabled. Set GARMIN_WOMENS_HEALTH_ENABLED=true " +
+      "only after explicitly opting in to highly sensitive reads through Garmin's unofficial consumer API."
+    );
+  }
 }
