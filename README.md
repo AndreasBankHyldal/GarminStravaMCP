@@ -15,7 +15,7 @@ An MCP (Model Context Protocol) server that integrates with **Strava** and **Gar
 - Fetch and search activities with flexible filters
 - Personal records scanner (fastest pace, highest HR, longest run, etc.)
 - Fitness stats, VO2max, and training status
-- Heart rate, HRV, sleep, and step data
+- Heart rate, configured sport-specific HR zones, HRV, sleep, and step data
 - **Structured workouts** with step-by-step guidance on your watch (warmup → intervals → recovery → cooldown)
 - Schedule workouts on your Garmin calendar (syncs to watch)
 - Training status and recovery insights
@@ -237,6 +237,7 @@ Add to your `.vscode/mcp.json`:
 | `garmin_get_fitness_stats` | Get fitness profile and stats |
 | `garmin_get_training_status` | Get VO2max, training load, recovery time |
 | `garmin_get_heart_rate` | Get heart rate data for a specific date |
+| `garmin_get_heart_rate_zones` | Get configured sport-specific BPM zones, max HR, resting HR, and lactate-threshold HR |
 | `garmin_get_hrv` | Get Heart Rate Variability data |
 | `garmin_get_sleep` | Get sleep data and quality scores |
 | `garmin_get_steps` | Get daily step count |
@@ -291,6 +292,7 @@ Once connected, try asking your AI assistant:
 - *"Am I ready for a hard workout today?"*
 - *"How well am I following my training plan?"*
 - *"What was my sleep quality last night?"*
+- *"Show me my configured Garmin heart rate zones"*
 - *"Create a tempo run workout on Garmin for tomorrow"*
 
 ## Architecture

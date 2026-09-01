@@ -2,6 +2,7 @@ import {
   GarminActivity,
   GarminActivityDetails,
   GarminActivitySplits,
+  GarminHeartRateZoneProfile,
   GarminLap,
 } from "./client.js";
 import {
@@ -13,6 +14,57 @@ import {
   LapLike,
   speedToPacePerKm,
 } from "../utils.js";
+
+const HEART_RATE_ZONE_LABELS = [
+  "Recovery",
+  "Easy/Aerobic",
+  "Tempo",
+  "Threshold",
+  "VO2max/Anaerobic",
+] as const;
+
+function toBpm(value: unknown): number | null {
+  const bpm = Number(value);
+  return Number.isFinite(bpm) && bpm > 0 ? bpm : null;
+}
+
+export function formatGarminHeartRateZones(
+  profiles: GarminHeartRateZoneProfile[]
+) {
+  return {
+    source: "garmin",
+    profile_count: profiles.length,
+    profiles: profiles.map((profile) => {
+      const floors = [
+        toBpm(profile.zone1Floor),
+        toBpm(profile.zone2Floor),
+        toBpm(profile.zone3Floor),
+        toBpm(profile.zone4Floor),
+        toBpm(profile.zone5Floor),
+      ];
+      const maxHeartRate = toBpm(profile.maxHeartRateUsed);
+
+      return {
+        sport: profile.sport ?? "DEFAULT",
+        training_method: profile.trainingMethod ?? null,
+        max_heart_rate_bpm: maxHeartRate,
+        resting_heart_rate_bpm: toBpm(profile.restingHeartRateUsed),
+        lactate_threshold_heart_rate_bpm: toBpm(
+          profile.lactateThresholdHeartRateUsed
+        ),
+        zones: floors.map((floor, index) => ({
+          zone: index + 1,
+          label: HEART_RATE_ZONE_LABELS[index],
+          min_bpm: floor,
+          max_bpm:
+            index < floors.length - 1 && floors[index + 1] !== null
+              ? floors[index + 1]! - 1
+              : maxHeartRate,
+        })),
+      };
+    }),
+  };
+}
 
 export function getGarminMovingSpeed(activity: {
   distance?: number;
