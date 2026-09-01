@@ -15,6 +15,23 @@ training plans, health metrics, and watch workout synchronization.
   calendar and compatible watches.
 - Store training plans locally in SQLite.
 
+### Optional women's training and menstrual-health tools
+
+- Symptom-led training context using local logs plus Garmin sleep/need, HRV,
+  resting HR, Body Battery change, load/recovery, hydration, weight, VO2max,
+  respiration, Pulse Ox, and skin temperature when available.
+- Probabilistic cycle context that explicitly avoids universal phase-based
+  training rules.
+- Personal pattern comparison across completed Garmin-recorded cycles.
+- Workload-based carbohydrate, protein, recovery, and hydration targets.
+- Non-diagnostic energy-availability, RED-S, iron, bleeding, pregnancy, and
+  bone-health guardrails.
+- Sensitive Garmin menstrual/pregnancy reads behind a second opt-in.
+
+The complete feature group is disabled by default. See
+[Women's Training and Menstrual-Health Tools](docs/womens-training.md) for its
+research basis, setup, privacy model, limitations, and references.
+
 ## Setup
 
 ```bash
@@ -29,6 +46,24 @@ Set the Garmin Connect credentials in `.env`:
 GARMIN_USERNAME=your.email@example.com
 GARMIN_PASSWORD=your_password
 ```
+
+All women-specific tools, prompts, and server guidance are disabled by default,
+so the standard MCP experience is unchanged. Enable them with:
+
+```dotenv
+I_AM_WOMAN=true
+```
+
+Garmin reproductive-health reads require a second opt-in because they use
+undocumented consumer endpoints. After reviewing the linked privacy guidance,
+enable both:
+
+```dotenv
+I_AM_WOMAN=true
+GARMIN_WOMENS_HEALTH_ENABLED=true
+```
+
+Restart the MCP server after changing either setting.
 
 If the account uses MFA, run the interactive authentication flow once:
 
@@ -107,11 +142,41 @@ be copied into the MCP client configuration.
 | `adjust_training_plan` | Adapt upcoming workouts from compliance and load |
 | `check_plan_compliance` | Compare planned workouts with Garmin activities |
 
+### Women's training and menstrual health
+
+This entire tool group is registered only when `I_AM_WOMAN=true`.
+
+| Tool | Description |
+|---|---|
+| `women_set_health_profile` | Store life stage, contraception context, and usual cycle details locally |
+| `women_log_daily_health` | Log period events, symptoms, subjective recovery, and session response |
+| `women_delete_cycle_event` | Correct a locally recorded cycle event |
+| `women_get_cycle_context` | Estimate calendar context with explicit uncertainty and no phase-only training rule |
+| `garmin_get_recovery_snapshot` | Read Garmin recovery, sleep, load, hydration, and biometric context |
+| `garmin_get_extended_wellness` | Return raw Body Battery and all-day stress data |
+| `women_get_training_context` | Combine symptoms, cycle context, and Garmin recovery |
+| `women_get_nutrition_targets` | Calculate workload-based fueling and hydration ranges |
+| `women_estimate_energy_availability` | Produce a non-diagnostic EA estimate with uncertainty |
+| `women_screen_training_health` | Educational triage for menstrual, iron, bone, pregnancy, and under-fueling concerns |
+| `women_analyze_cycle_training_patterns` | Compare personal patterns across completed cycles using Garmin activities |
+
+With both `I_AM_WOMAN=true` and
+`GARMIN_WOMENS_HEALTH_ENABLED=true`, the server additionally registers:
+
+- `garmin_get_menstrual_day`
+- `garmin_get_menstrual_calendar`
+- `garmin_get_pregnancy_summary`
+
+Garmin does not publish the private response schema, so these tools return
+opaque JSON and unverified date candidates rather than inventing period-start
+fields.
+
 ## Development
 
 ```bash
 npm run dev
 npm run build
+npm test
 npm start
 ```
 
@@ -142,9 +207,9 @@ reintroducing it:
 
 ## Security
 
-Never commit credentials, OAuth tokens, Garmin session files, MFA codes, or live
-SQLite databases. The repository ignore rules cover current Garmin state and
-legacy archived token files.
+Never commit credentials, OAuth tokens, Garmin session files, MFA codes, raw
+reproductive-health responses, or live SQLite databases. The repository ignore
+rules cover current Garmin state and legacy archived token files.
 
 ## License
 

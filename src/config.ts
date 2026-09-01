@@ -107,9 +107,15 @@ export const config = {
     garminTokenDir: resolveStateArtifact(".garmin-tokens"),
     garminMfaDir: path.join(stateDir, ".garmin-mfa"),
   },
+  women: {
+    toolsEnabled:
+      process.env.I_AM_WOMAN?.trim().toLowerCase() === "true",
+  },
   garmin: {
     username: process.env.GARMIN_USERNAME ?? "",
     password: process.env.GARMIN_PASSWORD ?? "",
+    womenHealthEnabled:
+      process.env.GARMIN_WOMENS_HEALTH_ENABLED?.trim().toLowerCase() === "true",
   },
   dbPath,
 };

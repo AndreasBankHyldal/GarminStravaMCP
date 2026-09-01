@@ -4,9 +4,24 @@ import { z } from "zod";
 import { registerGarminTools } from "./garmin/tools.js";
 import { registerAnalysisTools } from "./analysis/tools.js";
 import { registerPlanningTools } from "./planning/tools.js";
+import { registerWomenTools } from "./women/tools.js";
+import { config } from "./config.js";
 
 // Redirect console.log to stderr so libraries can't pollute stdout
 console.log = console.error;
+
+const womenCapabilities = config.women.toolsEnabled
+  ? `
+- Log menstrual-health symptoms locally and estimate cycle context with explicit uncertainty
+- Combine current symptoms with Garmin sleep, HRV, resting HR, Body Battery, and load data
+- Calculate evidence-based fueling ranges and screen for RED-S, iron, bleeding, and bone-health concerns
+- Compare the athlete's own patterns across completed cycles without deterministic phase rules`
+  : "";
+const womenTips = config.women.toolsEnabled
+  ? `
+- Use women_get_training_context rather than menstrual phase alone when adjusting a session
+- Treat women_screen_training_health as educational triage, never diagnosis or medical clearance`
+  : "";
 
 const server = new McpServer(
   { name: "garmin-connect-mcp", version: "1.0.0" },
@@ -33,7 +48,7 @@ Available capabilities:
 - Produce a daily readiness score from sleep/HRV/HR/load
 - Generate weekly coach brief with trend-based recommendations
 - Auto-adjust training plans based on compliance and fatigue
-- Smart delta-sync training plans to Garmin calendar
+- Smart delta-sync training plans to Garmin calendar${womenCapabilities}
 
 All dates include day-of-week and human-readable format to avoid temporal confusion.
 Activities include effort level classification and heart rate zone information.
@@ -45,7 +60,7 @@ Tips:
 - Use garmin_search_activities to find specific activities
 - Use garmin_get_heart_rate_zones before making heart-rate-based training recommendations
 - Use create_training_plan to set up a structured training schedule
-- Use garmin_add_running_workout to push workouts to your Garmin watch
+- Use garmin_add_running_workout to push workouts to your Garmin watch${womenTips}
 - Use the prompts for guided multi-step analysis workflows`,
   }
 );
@@ -187,6 +202,35 @@ server.prompt(
   })
 );
 
+if (config.women.toolsEnabled) {
+  server.prompt(
+    "women-training-check",
+    "Symptom-led training and fueling check using local menstrual-health logs and Garmin recovery data.",
+    {
+      planned_session: z
+        .enum(["rest", "easy", "moderate", "hard", "race"])
+        .describe("Session currently planned"),
+    },
+    ({ planned_session }) => ({
+      messages: [{
+        role: "user",
+        content: {
+          type: "text",
+          text: `Help me assess a planned ${planned_session} session using an evidence-based, symptom-led approach.
+
+1. Use women_get_cycle_context only for uncertain context, not as a deterministic training rule
+2. Use women_get_training_context with planned_session "${planned_session}" and Garmin recovery enabled
+3. If fueling is relevant, ask for the minimum inputs needed by women_get_nutrition_targets
+4. If the logs contain medical warning signs, use women_screen_training_health and prioritize its triage
+5. Explain which signals changed the recommendation and which data was unavailable
+
+Do not claim that a menstrual phase causes better performance or injury risk.`,
+        },
+      }],
+    })
+  );
+}
+
 server.prompt(
   "race-plan",
   "Create a training plan leading up to a target race.",
@@ -221,6 +265,7 @@ server.prompt(
 registerGarminTools(server);
 registerAnalysisTools(server);
 registerPlanningTools(server);
+registerWomenTools(server);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
