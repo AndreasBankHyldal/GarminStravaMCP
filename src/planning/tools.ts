@@ -3,7 +3,6 @@ import { z } from "zod";
 import { getDb } from "../db/database.js";
 import crypto from "node:crypto";
 import * as garminClient from "../garmin/client.js";
-import * as stravaClient from "../strava/client.js";
 
 export function registerPlanningTools(server: McpServer): void {
   server.tool(
@@ -344,12 +343,11 @@ export function registerPlanningTools(server: McpServer): void {
     "Adaptive training plan engine. Analyzes compliance and recent load, then proposes (or applies) updates to upcoming workouts.",
     {
       plan_id: z.string().optional().describe("Plan ID (omit for most recent plan)"),
-      source: z.enum(["strava", "garmin"]).default("strava").describe("Activity source used for compliance/load analysis"),
       mode: z.enum(["preview", "apply"]).default("preview").describe("Preview recommendations or apply changes directly"),
       aggressiveness: z.enum(["conservative", "balanced", "aggressive"]).default("balanced").describe("How strongly to adjust"),
       lookback_days: z.number().min(7).max(56).default(14).describe("How many days back to evaluate"),
     },
-    async ({ plan_id, source, mode, aggressiveness, lookback_days }) => {
+    async ({ plan_id, mode, aggressiveness, lookback_days }) => {
       try {
         const db = getDb();
         const plan = (plan_id
@@ -382,7 +380,7 @@ export function registerPlanningTools(server: McpServer): void {
           return d >= today && d <= adjustmentWindowEnd;
         });
 
-        const actualRuns = await fetchActualRuns(source, lookbackStart, today);
+        const actualRuns = await fetchActualRuns(lookbackStart, today);
         const byDate = new Map<string, any[]>();
         for (const run of actualRuns) {
           const key = run.date.slice(0, 10);
@@ -543,9 +541,8 @@ export function registerPlanningTools(server: McpServer): void {
     "Compare planned workouts against actual completed activities to check plan adherence.",
     {
       plan_id: z.string().optional().describe("Plan ID (omit for most recent plan)"),
-      source: z.enum(["strava", "garmin"]).default("strava").describe("Activity data source"),
     },
-    async ({ plan_id, source }) => {
+    async ({ plan_id }) => {
       try {
         const db = getDb();
 
@@ -570,34 +567,19 @@ export function registerPlanningTools(server: McpServer): void {
         const startDate = new Date(plan.start_date);
         const endDate = plan.end_date ? new Date(plan.end_date) : new Date();
 
-        let actualActivities: any[];
-
-        if (source === "strava") {
-          const afterTs = Math.floor(startDate.getTime() / 1000);
-          const beforeTs = Math.floor(endDate.getTime() / 1000);
-          const activities = await (await import("../strava/client.js")).getActivities(1, 100, afterTs, beforeTs);
-          actualActivities = activities.map((a) => ({
-            date: a.start_date_local.split("T")[0],
-            distance_km: a.distance / 1000,
-            duration_min: a.moving_time / 60,
-            type: a.sport_type || a.type,
-            name: a.name,
+        const garminActs = await garminClient.getAllActivities(500);
+        const actualActivities = garminActs
+          .filter((a) => {
+            const d = new Date(a.startTimeLocal);
+            return d >= startDate && d <= endDate;
+          })
+          .map((a) => ({
+            date: a.startTimeLocal.split("T")[0],
+            distance_km: (a.distance ?? 0) / 1000,
+            duration_min: (a.duration ?? 0) / 60,
+            type: a.activityType?.typeKey ?? "unknown",
+            name: a.activityName,
           }));
-        } else {
-          const garminActs = await (await import("../garmin/client.js")).getActivities(0, 100);
-          actualActivities = garminActs
-            .filter((a) => {
-              const d = new Date(a.startTimeLocal);
-              return d >= startDate && d <= endDate;
-            })
-            .map((a) => ({
-              date: a.startTimeLocal.split("T")[0],
-              distance_km: (a.distance ?? 0) / 1000,
-              duration_min: (a.duration ?? 0) / 60,
-              type: a.activityType?.typeKey ?? "unknown",
-              name: a.activityName,
-            }));
-        }
 
         // Match planned vs actual
         const compliance = workouts.map((w: any) => {
@@ -1125,26 +1107,9 @@ type ActualRun = {
 };
 
 async function fetchActualRuns(
-  source: "strava" | "garmin",
   startDate: Date,
   endDate: Date
 ): Promise<ActualRun[]> {
-  if (source === "strava") {
-    const afterTs = Math.floor(startDate.getTime() / 1000);
-    const beforeTs = Math.floor(endDate.getTime() / 1000);
-    const acts = await stravaClient.getActivities(1, 200, afterTs, beforeTs);
-    return acts
-      .filter((a) => (a.sport_type || a.type || "").toLowerCase().includes("run"))
-      .map((a) => ({
-        date: normalizeDateKey(a.start_date_local),
-        distance_km: a.distance / 1000,
-        duration_min: a.moving_time / 60,
-        avg_hr: a.average_heartrate ?? null,
-        max_hr: a.max_heartrate ?? null,
-        name: a.name,
-      }));
-  }
-
   const acts = await garminClient.getAllActivities(500);
   return acts
     .filter((a) => {

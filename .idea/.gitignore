@@ -2,7 +2,6 @@
 /shelf/
 /workspace.xml
 # Rider ignored files
-/.idea.mcpStravaGarmin.iml
 /modules.xml
 /contentModel.xml
 /projectSettingsUpdater.xml
