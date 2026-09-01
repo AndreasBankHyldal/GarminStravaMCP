@@ -1,5 +1,5 @@
 {
-  "name": "mcp-strava-garmin",
+  "name": "mcp-garmin-connect",
   "version": "1.0.0",
   "type": "module",
   "main": "dist/index.js",
@@ -7,13 +7,12 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "strava-auth": "tsx src/strava/auth-flow.ts",
     "garmin-auth": "tsx src/garmin/auth-flow.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "MCP server for Strava and Garmin Connect integration",
+  "description": "MCP server for Garmin Connect training analysis and planning",
   "dependencies": {
     "@gooin/garmin-connect": "^1.7.6",
     "@modelcontextprotocol/sdk": "^1.29.0",
