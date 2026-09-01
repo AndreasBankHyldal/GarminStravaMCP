@@ -5,6 +5,7 @@ import { formatDuration } from "../utils.js";
 import {
   formatGarminActivity,
   formatGarminActivityDetails,
+  formatGarminHeartRateZones,
   getGarminMovingSpeed,
 } from "./format.js";
 
@@ -275,6 +276,26 @@ export function registerGarminTools(server: McpServer): void {
         const hr = await garminClient.getHeartRate(d);
         return {
           content: [{ type: "text", text: JSON.stringify(hr, null, 2) }],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_get_heart_rate_zones",
+    "Get the athlete's configured Garmin heart rate zones, including sport-specific BPM ranges, max heart rate, resting heart rate, and lactate-threshold heart rate.",
+    {},
+    async () => {
+      try {
+        const profiles = await garminClient.getHeartRateZones();
+        const formatted = formatGarminHeartRateZones(profiles);
+        return {
+          content: [{ type: "text", text: JSON.stringify(formatted, null, 2) }],
         };
       } catch (err: any) {
         return {

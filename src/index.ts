@@ -31,6 +31,7 @@ Available capabilities:
 - Create workouts on Garmin Connect (syncs to your watch)
 - Create and edit activities on Strava
 - Search all activities and find personal records
+- Read configured Garmin heart rate zones and thresholds
 - Calculate rolling best efforts (1K/5K/10K/etc.) from streams/splits
 - Compute training load and fatigue model (CTL/ATL/TSB style)
 - Produce a daily readiness score from sleep/HRV/HR/load
@@ -46,6 +47,7 @@ Tips:
 - Use analyze_run_performance with the matching source for deep analysis of a specific run
 - Use garmin_get_personal_records to find all-time bests
 - Use garmin_search_activities to find specific activities
+- Use garmin_get_heart_rate_zones before making heart-rate-based training recommendations
 - Use create_training_plan to set up a structured training schedule
 - Use garmin_add_running_workout to push workouts to your Garmin watch
 - Use the prompts for guided multi-step analysis workflows`,

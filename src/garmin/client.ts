@@ -294,6 +294,20 @@ export interface GarminActivityChart {
   }>;
 }
 
+export interface GarminHeartRateZoneProfile {
+  sport?: string;
+  trainingMethod?: string;
+  zone1Floor?: number;
+  zone2Floor?: number;
+  zone3Floor?: number;
+  zone4Floor?: number;
+  zone5Floor?: number;
+  maxHeartRateUsed?: number;
+  restingHeartRateUsed?: number;
+  lactateThresholdHeartRateUsed?: number;
+  [key: string]: unknown;
+}
+
 export async function getActivities(start = 0, limit = 20): Promise<GarminActivity[]> {
   return withRetry(gc => gc.getActivities(start, limit));
 }
@@ -327,6 +341,12 @@ export async function getActivityChart(activityId: number): Promise<GarminActivi
 
 export async function getHeartRate(date?: Date): Promise<any> {
   return withRetry(gc => gc.getHeartRate(date));
+}
+
+export async function getHeartRateZones(): Promise<GarminHeartRateZoneProfile[]> {
+  return withRetry(gc =>
+    gc.get(`${gc.url.GC_API}/biometric-service/heartRateZones`)
+  );
 }
 
 export async function getSleepData(date?: Date): Promise<any> {
