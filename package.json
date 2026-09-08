@@ -4,10 +4,13 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:ui && npm run build:copilot",
+    "build:ui": "node scripts/build-dashboard.mjs",
+    "build:copilot": "node scripts/build-copilot.mjs",
+    "install:copilot": "npm run build:ui && npm run build:copilot && node scripts/install-copilot.mjs",
     "test": "tsx --test tests/**/*.test.ts",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
+    "dev": "npm run build:ui && tsx src/index.ts",
     "garmin-auth": "tsx src/garmin/auth-flow.ts"
   },
   "keywords": [],
@@ -16,6 +19,7 @@
   "description": "MCP server for Garmin Connect training analysis and planning",
   "dependencies": {
     "@gooin/garmin-connect": "^1.7.6",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^17.4.2",
@@ -24,6 +28,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.6.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }

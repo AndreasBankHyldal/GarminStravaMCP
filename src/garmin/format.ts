@@ -57,8 +57,8 @@ export function formatGarminHeartRateZones(
           label: HEART_RATE_ZONE_LABELS[index],
           min_bpm: floor,
           max_bpm:
-            index < floors.length - 1 && floors[index + 1] !== null
-              ? floors[index + 1]! - 1
+            index < floors.length - 1
+              ? floors[index + 1] !== null ? floors[index + 1]! - 1 : null
               : maxHeartRate,
         })),
       };

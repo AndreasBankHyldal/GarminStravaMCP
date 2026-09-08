@@ -1,7 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 import * as garminClient from "./client.js";
 import { formatDuration } from "../utils.js";
+import { reportResult, reportToolMeta } from "../presentation/resource.js";
+import { activityReport, zonesReport } from "../presentation/reports.js";
 import {
   formatGarminActivity,
   formatGarminActivityDetails,
@@ -201,11 +204,13 @@ export function registerGarminTools(server: McpServer): void {
     }
   );
 
-  server.tool(
+  registerAppTool(
+    server,
     "garmin_get_activity_details",
-    "Get detailed Garmin activity data, including individual laps and interval/recovery structure.",
     {
-      activity_id: z.number().describe("The Garmin activity ID"),
+      description: "Get detailed Garmin activity data, including individual laps and interval/recovery structure. Includes an interactive pace and heart-rate dashboard in MCP Apps clients.",
+      inputSchema: { activity_id: z.number().describe("The Garmin activity ID") },
+      _meta: reportToolMeta,
     },
     async ({ activity_id }) => {
       try {
@@ -214,9 +219,7 @@ export function registerGarminTools(server: McpServer): void {
           garminClient.getActivitySplits(activity_id),
         ]);
         const formatted = formatGarminActivityDetails(activity, splits);
-        return {
-          content: [{ type: "text", text: JSON.stringify(formatted, null, 2) }],
-        };
+        return reportResult(formatted, activityReport(formatted));
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err.message}` }],
@@ -286,17 +289,19 @@ export function registerGarminTools(server: McpServer): void {
     }
   );
 
-  server.tool(
+  registerAppTool(
+    server,
     "garmin_get_heart_rate_zones",
-    "Get the athlete's configured Garmin heart rate zones, including sport-specific BPM ranges, max heart rate, resting heart rate, and lactate-threshold heart rate.",
-    {},
+    {
+      description: "Get the athlete's configured Garmin heart rate zones, including sport-specific BPM ranges, max heart rate, resting heart rate, and lactate-threshold heart rate. Includes an interactive colour-coded zone dashboard in MCP Apps clients.",
+      inputSchema: {},
+      _meta: reportToolMeta,
+    },
     async () => {
       try {
         const profiles = await garminClient.getHeartRateZones();
         const formatted = formatGarminHeartRateZones(profiles);
-        return {
-          content: [{ type: "text", text: JSON.stringify(formatted, null, 2) }],
-        };
+        return reportResult(formatted, zonesReport(formatted));
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err.message}` }],

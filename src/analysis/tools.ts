@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 import { getDb } from "../db/database.js";
 import * as garminClient from "../garmin/client.js";
@@ -6,7 +7,10 @@ import {
   formatGarminActivityDetails,
   hasGarminIntervalStructure,
 } from "../garmin/format.js";
-import { speedToPacePerKm, formatDuration } from "../utils.js";
+import { speedToPacePerKm, formatDuration, startOfWeek } from "../utils.js";
+import { buildTrainingTrends } from "./trends.js";
+import { reportResult, reportToolMeta } from "../presentation/resource.js";
+import { loadReport, raceReport, readinessReport, runReport, trendsReport, weeklyReport, type RunReportData } from "../presentation/reports.js";
 
 function paceConsistency(paces: number[]) {
   const avgPace = paces.reduce((a, b) => a + b, 0) / paces.length;
@@ -125,7 +129,7 @@ async function analyzeGarminRun(activityId: number) {
     garminClient.getActivityChart(activityId),
   ]);
   const detail = formatGarminActivityDetails(activity, splits);
-  const analysis: any = {
+  const analysis: RunReportData = {
     source: "garmin",
     activity: {
       name: detail.name,
@@ -201,18 +205,18 @@ async function analyzeGarminRun(activityId: number) {
 }
 
 export function registerAnalysisTools(server: McpServer): void {
-  server.tool(
+  registerAppTool(
+    server,
     "analyze_run_performance",
-    "Analyze a Garmin run: pace consistency, HR drift, laps, and interval/recovery structure.",
     {
-      activity_id: z.number().describe("Garmin activity ID"),
+      description: "Analyze a Garmin run: pace consistency, HR drift, laps, and interval/recovery structure. Includes an interactive lap-pace and heart-rate dashboard in MCP Apps clients.",
+      inputSchema: { activity_id: z.number().describe("Garmin activity ID") },
+      _meta: reportToolMeta,
     },
     async ({ activity_id }) => {
       try {
         const analysis = await analyzeGarminRun(activity_id);
-        return {
-          content: [{ type: "text", text: JSON.stringify(analysis, null, 2) }],
-        };
+        return reportResult(analysis, runReport(analysis));
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err.message}` }],
@@ -222,97 +226,19 @@ export function registerAnalysisTools(server: McpServer): void {
     }
   );
 
-  server.tool(
+  registerAppTool(
+    server,
     "get_training_trends",
-    "Get aggregated training trends over recent weeks: weekly mileage, average pace, heart rate trends.",
     {
-      weeks: z.number().min(1).max(52).default(8).describe("Number of weeks to analyze"),
+      description: "Get aggregated training trends over recent weeks: weekly mileage, average pace, heart rate trends. Includes interactive trend charts in MCP Apps clients.",
+      inputSchema: { weeks: z.number().min(1).max(52).default(8).describe("Number of weeks to analyze") },
+      _meta: reportToolMeta,
     },
     async ({ weeks }) => {
       try {
-        const afterDate = new Date();
-        afterDate.setDate(afterDate.getDate() - weeks * 7);
         const garminActs = await garminClient.getAllActivities(500);
-        const activities = garminActs
-          .filter((a) => new Date(a.startTimeLocal) >= afterDate)
-          .map((a) => ({
-            date: a.startTimeLocal,
-            type: a.activityType?.typeKey ?? "unknown",
-            distance: a.distance ?? 0,
-            duration: a.duration ?? 0,
-            pace: a.averageSpeed,
-            hr: a.averageHR,
-            elevation: a.elevationGain,
-          }));
-
-        // Group by week
-        const weeklyData: Record<string, any[]> = {};
-        for (const act of activities) {
-          const d = new Date(act.date);
-          const weekStart = new Date(d);
-          weekStart.setDate(d.getDate() - d.getDay() + 1); // Monday
-          const weekKey = weekStart.toISOString().split("T")[0];
-          if (!weeklyData[weekKey]) weeklyData[weekKey] = [];
-          weeklyData[weekKey].push(act);
-        }
-
-        const weeklyTrends = Object.entries(weeklyData)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([week, acts]) => {
-            const runs = acts.filter(
-              (a) =>
-                a.type.toLowerCase().includes("run") ||
-                a.type.toLowerCase() === "running"
-            );
-            const totalDist = runs.reduce((sum, a) => sum + a.distance, 0);
-            const totalDuration = runs.reduce((sum, a) => sum + a.duration, 0);
-            const avgHr =
-              runs.filter((r) => r.hr).length > 0
-                ? runs.filter((r) => r.hr).reduce((sum, r) => sum + r.hr, 0) /
-                  runs.filter((r) => r.hr).length
-                : null;
-
-            return {
-              week_of: week,
-              total_activities: acts.length,
-              runs: runs.length,
-              total_km: (totalDist / 1000).toFixed(1),
-              total_time: formatDuration(totalDuration),
-              avg_pace: totalDuration > 0 ? speedToPacePerKm(totalDist / totalDuration) : "N/A",
-              avg_heartrate: avgHr ? Math.round(avgHr) : null,
-            };
-          });
-
-        // Overall trends
-        const allKms = weeklyTrends.map((w) => parseFloat(w.total_km));
-        const trend =
-          allKms.length >= 2
-            ? allKms[allKms.length - 1] > allKms[0]
-              ? "increasing"
-              : allKms[allKms.length - 1] < allKms[0]
-              ? "decreasing"
-              : "stable"
-            : "insufficient data";
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  period: `Last ${weeks} weeks`,
-                  source: "garmin",
-                  weekly_breakdown: weeklyTrends,
-                  volume_trend: trend,
-                  total_runs: weeklyTrends.reduce((s, w) => s + w.runs, 0),
-                  total_km: allKms.reduce((s, k) => s + k, 0).toFixed(1),
-                },
-                null,
-                2
-              ),
-            },
-          ],
-        };
+        const result = buildTrainingTrends(garminActs, weeks);
+        return reportResult(result, trendsReport(result));
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err.message}` }],
@@ -322,16 +248,20 @@ export function registerAnalysisTools(server: McpServer): void {
     }
   );
 
-  server.tool(
+  registerAppTool(
+    server,
     "race_day_strategy",
-    `Create a detailed race day pacing strategy. Uses your actual training data, personal records, and running science (VDOT equivalent tables, negative split pacing, HR zone targets) to build a km-by-km plan. Accounts for race distance, goal time, elevation, and conditions.`,
     {
-      race_distance_km: z.number().describe("Race distance in km (e.g. 5, 10, 21.1, 42.2)"),
-      goal_time_minutes: z.number().optional().describe("Goal finish time in minutes (e.g. 25 for a 25min 5K, 105 for 1:45 half). If omitted, estimates from your data."),
-      elevation_gain_m: z.number().optional().describe("Expected elevation gain in meters. Adds pace adjustment for hills."),
-      temperature_c: z.number().optional().describe("Expected temperature in Celsius. Adds heat adjustment above 15°C."),
-      wind_speed_kph: z.number().optional().describe("Expected average wind speed in km/h. Adds pacing adjustment for windy conditions."),
-      course_profile: z.enum(["flat", "rolling", "hilly"]).optional().describe("Course terrain profile"),
+      description: "Create a detailed race day pacing strategy. Uses your actual training data, personal records, and running science (VDOT equivalent tables, negative split pacing, HR zone targets) to build a km-by-km plan. Accounts for race distance, goal time, elevation, and conditions. Includes an interactive pacing dashboard in MCP Apps clients.",
+      inputSchema: {
+        race_distance_km: z.number().describe("Race distance in km (e.g. 5, 10, 21.1, 42.2)"),
+        goal_time_minutes: z.number().optional().describe("Goal finish time in minutes (e.g. 25 for a 25min 5K, 105 for 1:45 half). If omitted, estimates from your data."),
+        elevation_gain_m: z.number().optional().describe("Expected elevation gain in meters. Adds pace adjustment for hills."),
+        temperature_c: z.number().optional().describe("Expected temperature in Celsius. Adds heat adjustment above 15°C."),
+        wind_speed_kph: z.number().optional().describe("Expected average wind speed in km/h. Adds pacing adjustment for windy conditions."),
+        course_profile: z.enum(["flat", "rolling", "hilly"]).optional().describe("Course terrain profile"),
+      },
+      _meta: reportToolMeta,
     },
     async ({ race_distance_km, goal_time_minutes, elevation_gain_m, temperature_c, wind_speed_kph, course_profile }) => {
       try {
@@ -502,9 +432,7 @@ export function registerAnalysisTools(server: McpServer): void {
           },
         };
 
-        return {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-        };
+        return reportResult(result, raceReport(result));
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err.message}` }],
@@ -514,31 +442,25 @@ export function registerAnalysisTools(server: McpServer): void {
     }
   );
 
-  server.tool(
+  registerAppTool(
+    server,
     "get_load_fatigue_model",
-    "Compute CTL/ATL/TSB-style training load model and fatigue risk from recent running activities.",
     {
-      days: z.number().min(21).max(180).default(90).describe("How many days to include in the model"),
+      description: "Compute CTL/ATL/TSB-style training load model and fatigue risk from recent running activities. Includes interactive fitness, fatigue, and balance charts in MCP Apps clients.",
+      inputSchema: { days: z.number().min(21).max(180).default(90).describe("How many days to include in the model") },
+      _meta: reportToolMeta,
     },
     async ({ days }) => {
       try {
         const runs = await fetchRunSamples(days);
         const loadModel = computeLoadModel(runs, days);
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(
-              {
-                source: "garmin",
-                days,
-                runs_analyzed: runs.length,
-                model: loadModel,
-              },
-              null,
-              2
-            ),
-          }],
+        const result = {
+          source: "garmin",
+          days,
+          runs_analyzed: runs.length,
+          model: loadModel,
         };
+        return reportResult(result, loadReport(result));
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err.message}` }],
@@ -548,10 +470,14 @@ export function registerAnalysisTools(server: McpServer): void {
     }
   );
 
-  server.tool(
+  registerAppTool(
+    server,
     "get_readiness_score",
-    "Create a daily readiness score from recovery metrics (sleep, HRV, resting HR) and training load state.",
-    {},
+    {
+      description: "Create a daily readiness score from recovery metrics (sleep, HRV, resting HR) and training load state. Includes an interactive score-contribution dashboard in MCP Apps clients.",
+      inputSchema: {},
+      _meta: reportToolMeta,
+    },
     async () => {
       try {
         const runs = await fetchRunSamples(42);
@@ -653,27 +579,19 @@ export function registerAnalysisTools(server: McpServer): void {
             ? "moderate_day_recommended"
             : "easy_or_rest_day_recommended";
 
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(
-              {
-                readiness_score: Math.round(score),
-                recommendation,
-                components,
-                load_snapshot: loadModel.current,
-                confidence:
-                  Object.keys(components).length >= 5
-                    ? "high"
-                    : Object.keys(components).length >= 3
-                    ? "medium"
-                    : "low",
-              },
-              null,
-              2
-            ),
-          }],
+        const result = {
+          readiness_score: Math.round(score),
+          recommendation,
+          components,
+          load_snapshot: loadModel.current,
+          confidence:
+            Object.keys(components).length >= 5
+              ? "high"
+              : Object.keys(components).length >= 3
+              ? "medium"
+              : "low",
         };
+        return reportResult(result, readinessReport(result));
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err.message}` }],
@@ -683,11 +601,13 @@ export function registerAnalysisTools(server: McpServer): void {
     }
   );
 
-  server.tool(
+  registerAppTool(
+    server,
     "weekly_coach_brief",
-    "Generate a weekly coaching brief with volume, intensity, load trend, and concrete recommendations.",
     {
-      week_offset: z.number().min(0).max(8).default(0).describe("0 = current week, 1 = previous week, etc."),
+      description: "Generate a weekly coaching brief with volume, intensity, load trend, and concrete recommendations. Includes an interactive weekly comparison dashboard in MCP Apps clients.",
+      inputSchema: { week_offset: z.number().min(0).max(8).default(0).describe("0 = current week, 1 = previous week, etc.") },
+      _meta: reportToolMeta,
     },
     async ({ week_offset }) => {
       try {
@@ -750,32 +670,24 @@ export function registerAnalysisTools(server: McpServer): void {
             ? plannedRunnable.filter((w) => completedDates.has(String(w.date).slice(0, 10))).length / plannedRunnable.length
             : null;
 
-        return {
-          content: [{
-            type: "text",
-            text: JSON.stringify(
-              {
-                period: {
-                  start: weekStart.toISOString().slice(0, 10),
-                  end_exclusive: weekEnd.toISOString().slice(0, 10),
-                  source: "garmin",
-                },
-                this_week: thisSummary,
-                previous_week: prevSummary,
-                change: {
-                  mileage_delta_percent: +mileageDeltaPct.toFixed(1),
-                  hard_session_delta: thisSummary.hard_sessions - prevSummary.hard_sessions,
-                },
-                load_snapshot: loadModel.current,
-                plan_adherence:
-                  adherence == null ? "no planned workouts found" : `${(adherence * 100).toFixed(0)}%`,
-                coach_notes: notes,
-              },
-              null,
-              2
-            ),
-          }],
+        const result = {
+          period: {
+            start: weekStart.toISOString().slice(0, 10),
+            end_exclusive: weekEnd.toISOString().slice(0, 10),
+            source: "garmin",
+          },
+          this_week: thisSummary,
+          previous_week: prevSummary,
+          change: {
+            mileage_delta_percent: +mileageDeltaPct.toFixed(1),
+            hard_session_delta: thisSummary.hard_sessions - prevSummary.hard_sessions,
+          },
+          load_snapshot: loadModel.current,
+          plan_adherence:
+            adherence == null ? "no planned workouts found" : `${(adherence * 100).toFixed(0)}%`,
+          coach_notes: notes,
         };
+        return reportResult(result, weeklyReport(result));
       } catch (err: any) {
         return {
           content: [{ type: "text", text: `Error: ${err.message}` }],
@@ -1143,15 +1055,6 @@ function getByPath(obj: any, path: string): any {
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
-}
-
-function startOfWeek(d: Date): Date {
-  const out = new Date(d);
-  const day = out.getDay(); // 0 Sunday
-  const shift = day === 0 ? -6 : 1 - day; // Monday start
-  out.setHours(0, 0, 0, 0);
-  out.setDate(out.getDate() + shift);
-  return out;
 }
 
 function summarizeRunBlock(runs: RunSample[]): {
