@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { snapshotSchema, type Snapshot } from "../presentation/capture.js";
 export { createGarminEventObserver } from "./events.js";
+export { createFitnessPanel, FITNESS_PANEL_ID } from "./panel.js";
 
 export function createReportStore(directory: string) {
   const pathFor = (id: string) => {
@@ -32,6 +33,19 @@ export function createReportStore(directory: string) {
     async remove(id: string): Promise<void> {
       await unlink(pathFor(id));
     },
+    async select(id: string): Promise<void> {
+      await this.read(id);
+      const temporary = join(directory, `selection-${randomUUID()}.tmp`);
+      await writeFile(temporary, JSON.stringify({ reportId: id }), { mode: 0o600, flag: "wx" });
+      await rename(temporary, join(directory, "selection.json"));
+    },
+    async selected(): Promise<Snapshot> {
+      const value: unknown = JSON.parse(await readFile(join(directory, "selection.json"), "utf8"));
+      if (!value || typeof value !== "object" || !("reportId" in value) || typeof value.reportId !== "string") {
+        throw new Error("The selected Garmin report is invalid.");
+      }
+      return this.read(value.reportId);
+    },
     async list(): Promise<Snapshot[]> {
       let filenames: string[];
       try {
@@ -50,7 +64,7 @@ export function createReportStore(directory: string) {
   };
 }
 
-export async function startReportServer(html: string, readSnapshot: () => Promise<Snapshot>) {
+export async function startReportServer(html: string, readSnapshot: () => Promise<Snapshot>, followsSelection = false) {
   const token = randomBytes(32).toString("hex");
   let origin = "";
   const sockets = new Set<import("node:net").Socket>();
@@ -83,7 +97,7 @@ export async function startReportServer(html: string, readSnapshot: () => Promis
     response.setHeader("Content-Type", "application/json");
     try {
       const snapshot = await readSnapshot();
-      response.end(request.method === "HEAD" ? undefined : JSON.stringify(snapshot));
+      response.end(request.method === "HEAD" ? undefined : JSON.stringify(followsSelection ? { ...snapshot, followsSelection: true } : snapshot));
     } catch (error) {
       console.error("Cannot read saved Garmin dashboard:", error instanceof Error ? error.message : String(error));
       response.writeHead(500).end(JSON.stringify({ error: "The saved Garmin report is unavailable or invalid. Run the Garmin tool again." }));

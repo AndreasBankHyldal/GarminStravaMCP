@@ -71,14 +71,21 @@ without depending on this checkout's path or `node_modules`. Re-run the installe
 after changing the dashboard or extension source.
 
 Keep your existing Garmin MCP connection configured. Ask Copilot to analyze a
-run, show training trends, or show your heart-rate zones. A tool-completion listener observes
-only the eight supported Garmin report tools and opens a **native Garmin fitness
-canvas from their actual results**. It also accepts the existing JSON-only Garmin
+run, show training trends, or show your heart-rate zones. A tool-completion listener
+saves results from the eight supported Garmin report tools **without opening tabs
+for background data gathering**. Copilot then uses `garmin_fitness_reports` and
+`garmin_fitness_show_report` to display only the report you requested in one
+reusable **Fitness report** tab. For example, a run-analysis request shows the
+analysis, not separate activity-detail and HR-zone tabs; a request for zones or
+trends shows that report instead. Selecting a report consolidates older Garmin
+tabs without deleting saved reports or closing unrelated canvases.
+
+The extension also accepts the existing JSON-only Garmin
 server, so no MCP server path change, extra login, or MCP Apps support is needed.
 The original tool output is not replaced, and no extra Garmin request is made.
 
 Each report is a timestamped snapshot, not a live feed. **Reload saved report**
-reloads that snapshot; ask Copilot to run the Garmin tool again for fresh data.
+reloads the selected snapshot; ask Copilot to run the Garmin tool again for fresh data.
 Existing panels remain explicitly dated snapshots when a later Garmin request
 fails. Malformed or truncated results produce a visible warning, never demo data.
 
