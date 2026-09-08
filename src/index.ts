@@ -6,6 +6,7 @@ import { registerAnalysisTools } from "./analysis/tools.js";
 import { registerPlanningTools } from "./planning/tools.js";
 import { registerWomenTools } from "./women/tools.js";
 import { config } from "./config.js";
+import { registerReportResource } from "./presentation/resource.js";
 
 // Redirect console.log to stderr so libraries can't pollute stdout
 console.log = console.error;
@@ -47,6 +48,7 @@ Available capabilities:
 - Compute training load and fatigue model (CTL/ATL/TSB style)
 - Produce a daily readiness score from sleep/HRV/HR/load
 - Generate weekly coach brief with trend-based recommendations
+- Display interactive fitness dashboards through the native Garmin fitness extension in Copilot desktop, or MCP Apps in compatible clients, with unchanged JSON fallback
 - Auto-adjust training plans based on compliance and fatigue
 - Smart delta-sync training plans to Garmin calendar${womenCapabilities}
 
@@ -59,6 +61,8 @@ Tips:
 - Use garmin_get_personal_records to find all-time bests
 - Use garmin_search_activities to find specific activities
 - Use garmin_get_heart_rate_zones before making heart-rate-based training recommendations
+- When a native Garmin canvas or MCP Apps dashboard is opened, let it present the charts and add concise interpretation rather than duplicating every value in a table
+- Without a native canvas extension or MCP Apps support, use the normal JSON results; never imply that an interactive dashboard is visible
 - Use create_training_plan to set up a structured training schedule
 - Use garmin_add_running_workout to push workouts to your Garmin watch${womenTips}
 - Use the prompts for guided multi-step analysis workflows`,
@@ -66,6 +70,8 @@ Tips:
 );
 
 // --- Resources: always-available context ---
+
+registerReportResource(server);
 
 server.resource(
   "garmin-health",
@@ -123,7 +129,7 @@ server.prompt(
 5. Flag any concerns (sudden volume increases >10%/week, missing rest days)
 6. Provide 2-3 actionable recommendations for the coming week
 
-Present the analysis in a clear, structured format with a weekly summary table.`,
+Use the interactive dashboard returned by get_training_trends when supported, followed by concise insights. For clients without MCP Apps, summarize the JSON with clear headings and a compact weekly table.`,
       },
     }],
   })
@@ -147,7 +153,8 @@ server.prompt(
    - Effort level relative to the workout type
    - Any notable patterns in the data
 4. Compare to similar recent workouts if possible
-5. Rate the overall execution of this run and suggest what to focus on next`,
+5. Rate the overall execution of this run and suggest what to focus on next
+6. Use the returned interactive lap-pace and heart-rate dashboard when supported; don't replace it with a duplicate table`,
       },
     }],
   })
@@ -165,14 +172,15 @@ server.prompt(
         text: `Check my training readiness for today. Please:
 1. Fetch my last 7 days of activities from Garmin (garmin_get_activities, count 10)
 2. Check my Garmin sleep data (garmin_get_sleep) and heart rate (garmin_get_heart_rate)
-3. Try to get training status from Garmin (garmin_get_training_status)
+3. Use get_readiness_score for the combined score, confidence, contributing signals, and interactive dashboard when supported
 4. Assess:
    - How much training load in the last 3 days?
    - When was my last rest day?
    - Sleep quality last night
    - Any signs of fatigue (elevated resting HR, poor sleep)
 5. Give a clear recommendation: ready for hard training, moderate day, or rest day
-6. If ready, suggest what type of workout would be most beneficial`,
+6. If ready, suggest what type of workout would be most beneficial
+7. Treat the score as a heuristic, not medical clearance, and explicitly acknowledge missing recovery signals`,
       },
     }],
   })

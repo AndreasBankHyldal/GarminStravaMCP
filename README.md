@@ -14,6 +14,91 @@ training plans, health metrics, and watch workout synchronization.
 - Create structured workouts and synchronize training plans to the Garmin
   calendar and compatible watches.
 - Store training plans locally in SQLite.
+- Interactive MCP Apps dashboards for run analysis, trends, heart-rate zones,
+  load/fatigue, readiness, weekly coaching, and race pacing.
+
+### Interactive fitness dashboards
+
+The following tools have interactive dashboards. **GitHub Copilot desktop uses
+the native canvas extension described below**; other MCP Apps-compatible clients
+can use the server's MCP Apps resource.
+
+| Tools | Dashboard |
+|---|---|
+| `analyze_run_performance`, `garmin_get_activity_details` | Pace and heart rate by recorded lap, run metrics, and HR drift when available |
+| `get_training_trends` | Weekly distance, pace, and heart-rate charts |
+| `garmin_get_heart_rate_zones` | Sport-profile tabs and colour-coded Z1-Z5 BPM ranges |
+| `get_load_fatigue_model` | Fitness (CTL), fatigue (ATL), and balance (TSB) history |
+| `get_readiness_score` | Readiness summary and positive/negative score contributions |
+| `weekly_coach_brief` | Selected-versus-previous-week volume and coaching notes |
+| `race_day_strategy` | Colour-coded target pace by race phase |
+
+Dashboards include metric cards, chart details, underlying data, and the original
+JSON. They support light/dark themes and narrow windows. Missing measurements are
+shown as unavailable rather than invented as zeros. Zone ranges are configured
+boundaries, **not time spent in zones**. Trend charts include zero-activity weeks
+from the fetched history and flag that the first/current weeks can be partial.
+
+#### Other clients: MCP Apps
+
+Run `npm install` and `npm run build`, then restart/reconnect the MCP server in
+your client so it discovers the new tool metadata and
+`ui://garmin/fitness-report.html` resource. Ask for a run analysis, training trends,
+or heart-rate zones as usual. The client must support the MCP Apps extension
+(`io.modelcontextprotocol/ui`); a client that only supports standard MCP tools
+will continue to receive the same JSON format and cannot display this dashboard.
+The server cannot force a client to render HTML.
+
+Charts render locally inside the client's sandbox using bundled JavaScript and
+SVG. They use no external chart service, CDN, remote fonts, or analytics, and do
+not persist fitness data in browser storage. The UI is read-only; it does not
+create or modify Garmin workouts.
+
+### GitHub Copilot desktop: native canvases
+
+Install the personal extension from this repository:
+
+```bash
+npm install
+npm run install:copilot
+```
+
+Then reload Copilot extensions in the current session, or restart the desktop
+app to activate it in all sessions. The installer places a self-contained copy
+under `$COPILOT_HOME/extensions/garmin-fitness` (normally
+`~/.copilot/extensions/garmin-fitness`). It works across projects and chats,
+without depending on this checkout's path or `node_modules`. Re-run the installer
+after changing the dashboard or extension source.
+
+Keep your existing Garmin MCP connection configured. Ask Copilot to analyze a
+run, show training trends, or show your heart-rate zones. A tool-completion listener observes
+only the eight supported Garmin report tools and opens a **native Garmin fitness
+canvas from their actual results**. It also accepts the existing JSON-only Garmin
+server, so no MCP server path change, extra login, or MCP Apps support is needed.
+The original tool output is not replaced, and no extra Garmin request is made.
+
+Each report is a timestamped snapshot, not a live feed. **Reload saved report**
+reloads that snapshot; ask Copilot to run the Garmin tool again for fresh data.
+Existing panels remain explicitly dated snapshots when a later Garmin request
+fails. Malformed or truncated results produce a visible warning, never demo data.
+
+To preserve reports across canvas/extension reloads, the extension stores JSON
+under that Copilot session's `files/garmin-reports/` artifact directory, not in
+this repository or a shared global fitness database. The files include the
+original tool result and should be treated as personal health data. They use
+owner-only permissions where supported and follow the session artifact lifecycle;
+remove individual saved report files if you no longer want to retain them.
+Deleting a file makes the corresponding canvas unavailable rather than fetching
+or reconstructing it silently.
+
+The renderer uses a read-only, token-protected HTTP server bound to `127.0.0.1`
+on a temporary port. Servers close with their panels or extension process. No
+Garmin credentials are copied into the extension, browser, or saved reports.
+The installed extension itself can be disabled in Copilot's extension settings.
+
+Source lives in `integrations/copilot/extension.mjs`, `src/copilot/`, and the
+shared `src/ui/` renderer. `npm run build:ui` bundles both browser entry points;
+`npm run build:copilot` packages the standalone native extension.
 
 ### Optional women's training and menstrual-health tools
 
@@ -182,6 +267,11 @@ npm start
 
 The server uses stdio transport. Runtime messages are sent to stderr so stdout
 remains valid MCP protocol output.
+
+`npm run build` compiles the server, bundles both dashboard entry points, and
+packages the Copilot extension into `dist/copilot/garmin-fitness/`.
+`npm run dev` rebuilds UI assets before starting the TypeScript server; restart
+it after UI edits. No manually managed web server is needed.
 
 ## Archived Strava integration
 

@@ -1,6 +1,14 @@
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
+export function startOfWeek(date: Date): Date {
+  const start = new Date(date);
+  const day = start.getDay();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() + (day === 0 ? -6 : 1 - day));
+  return start;
+}
+
 /** Enrich a date string with human-readable temporal context to prevent LLM hallucination */
 export function enrichDate(dateStr: string): {
   iso: string;

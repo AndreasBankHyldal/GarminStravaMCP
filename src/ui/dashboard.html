@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Garmin fitness dashboard</title>
+    <!-- DASHBOARD_STYLES -->
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M2 12h5l3-7 4 14 3-7h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span>GARMIN <span class="brand-divider">/</span> TRAINING INSIGHTS</span>
+        <span class="read-only-label">Read-only</span>
+      </header>
+      <main id="dashboard" aria-busy="true" data-state="loading">
+        <section class="state-panel" role="status">
+          <span class="state-symbol loading-symbol" aria-hidden="true"></span>
+          <h1>Preparing your dashboard</h1>
+          <p>Preparing the Garmin tool output for this report. Only readings returned by the tool will be shown.</p>
+        </section>
+      </main>
+      <p id="announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+      <footer class="app-footer">Source values, not a diagnosis. This browser does not persist readings.</footer>
+    </div>
+    <noscript>This dashboard needs JavaScript. The original tool response remains available in your conversation.</noscript>
+    <!-- DASHBOARD_SCRIPT -->
+  </body>
+</html>
