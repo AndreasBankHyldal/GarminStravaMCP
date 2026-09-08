@@ -6,6 +6,7 @@ interface SavedReport {
   toolName: string;
   capturedAt: string;
   result: ToolResult;
+  followsSelection: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -28,10 +29,11 @@ function readSnapshot(value: unknown): SavedReport {
     || typeof value.id !== "string" || !value.id.trim()
     || typeof value.toolName !== "string" || !value.toolName.trim()
     || typeof value.capturedAt !== "string" || !Number.isFinite(Date.parse(value.capturedAt))
-    || !isToolResult(value.result)) {
+    || !isToolResult(value.result)
+    || (value.followsSelection !== undefined && typeof value.followsSelection !== "boolean")) {
     throw new Error("The local endpoint returned a malformed saved report.");
   }
-  return { id: value.id, toolName: value.toolName, capturedAt: value.capturedAt, result: value.result };
+  return { id: value.id, toolName: value.toolName, capturedAt: value.capturedAt, result: value.result, followsSelection: value.followsSelection === true };
 }
 
 function colorMode(value: string | undefined): "light" | "dark" | "auto" | undefined {
@@ -112,11 +114,14 @@ async function loadSnapshot(): Promise<void> {
     if (!response.ok) throw new Error(`The local report endpoint returned HTTP ${response.status}.`);
     const payload: unknown = await response.json();
     const snapshot = readSnapshot(payload);
-    if (reportId !== undefined && snapshot.id !== reportId) {
+    if (reportId !== undefined && snapshot.id !== reportId && !snapshot.followsSelection) {
       throw new Error("The local endpoint returned a different report. Reopen the intended saved report.");
     }
     if (disposed) return;
     reportId = snapshot.id;
+    note.textContent = snapshot.followsSelection
+      ? "One tab for the requested report. Supporting tool calls do not change it. Reloading reads the selected saved snapshot, not new Garmin data."
+      : "This report is not live. Reloading reads the stored snapshot, not new Garmin data.";
     source.textContent = `Source tool: ${snapshot.toolName} · Captured: `;
     const capturedAt = document.createElement("time");
     capturedAt.dateTime = snapshot.capturedAt;
