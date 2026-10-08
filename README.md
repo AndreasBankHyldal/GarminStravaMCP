@@ -25,7 +25,7 @@ can use the server's MCP Apps resource.
 
 | Tools | Dashboard |
 |---|---|
-| `analyze_run_performance`, `garmin_get_activity_details` | Pace and heart rate by recorded lap, run metrics, and HR drift when available |
+| `analyze_run_performance`, `garmin_get_km_splits`, `garmin_get_activity_details` | Kilometre pace, HR and elevation when splits are requested; separate recorded laps, run metrics and HR drift when available |
 | `get_training_trends` | Weekly distance, pace, and heart-rate charts |
 | `garmin_get_heart_rate_zones` | Sport-profile tabs and colour-coded Z1-Z5 BPM ranges |
 | `get_load_fatigue_model` | Fitness (CTL), fatigue (ATL), and balance (TSB) history |
@@ -72,7 +72,7 @@ after changing the dashboard or extension source.
 
 Keep your existing Garmin MCP connection configured. Ask Copilot to analyze a
 run, show training trends, or show your heart-rate zones. A tool-completion listener
-saves results from the eight supported Garmin report tools **without opening tabs
+saves results from the nine supported Garmin report tools **without opening tabs
 for background data gathering**. Copilot then uses `garmin_fitness_reports` and
 `garmin_fitness_show_report` to display only the report you requested in one
 reusable **Fitness report** tab. For example, a run-analysis request shows the
@@ -203,6 +203,7 @@ be copied into the MCP client configuration.
 |---|---|
 | `garmin_get_activities` | Fetch recent activities |
 | `garmin_get_activity_details` | Get activity details, laps, and interval structure |
+| `garmin_get_km_splits` | Get actual 1 km distance splits, final partial km, pacing and recorded sensor metrics |
 | `garmin_get_personal_records` | Scan activities for personal records |
 | `garmin_search_activities` | Search activities by distance, date, pace, or heart rate |
 | `garmin_get_fitness_stats` | Get fitness profile and statistics |
@@ -221,7 +222,7 @@ be copied into the MCP client configuration.
 
 | Tool | Description |
 |---|---|
-| `analyze_run_performance` | Analyze Garmin pacing, heart-rate drift, laps, and intervals |
+| `analyze_run_performance` | Analyze kilometre pacing, equal-distance halves, HR drift/decoupling, laps and intervals |
 | `get_training_trends` | Summarize weekly mileage, pace, and heart-rate trends |
 | `race_day_strategy` | Build a VDOT-based race pacing and execution plan |
 | `get_load_fatigue_model` | Compute CTL/ATL/TSB-style load and fatigue |
@@ -233,6 +234,63 @@ be copied into the MCP client configuration.
 | `sync_training_plan_to_garmin` | Synchronize a plan to Garmin calendar |
 | `adjust_training_plan` | Adapt upcoming workouts from compliance and load |
 | `check_plan_compliance` | Compare planned workouts with Garmin activities |
+
+### Kilometre splits and run performance
+
+**For run analysis or run performance, use `analyze_run_performance` for the
+complete all-in-one report.** A normal run-performance request means all
+available km splits, pacing/timing, heart-rate data, elevation/altitude in meters,
+cadence, power, temperature and interval laps together, not just split times.
+It fetches this data itself; the AI does not need separate activity-detail,
+HR-data or km-splits calls for these measurements.
+
+| What you ask | Tool workflow |
+|---|---|
+| "Analyze Garmin run 123456789" or "Show run performance" | `analyze_run_performance` with that `activity_id`, returning the full report |
+| "Analyze my latest run" or "Analyze yesterday's run" | Find the running activity with `garmin_get_activities` or `garmin_search_activities`, then call `analyze_run_performance`; clarify if multiple runs match |
+| "Only show kilometre splits for run 123456789" | `garmin_get_km_splits` with that `activity_id`; reserve this for explicit splits-only requests |
+
+This routing is included in the MCP server's AI instructions, tool descriptions,
+the `activity-deep-dive` prompt, and the native Copilot extension's guidance.
+For a run analysis, the native extension displays only the analysis report,
+not additional tabs for supporting tool calls.
+
+Call `garmin_get_km_splits` with `{ "activity_id": 123456789 }` for distance
+splits, or `analyze_run_performance` with the same ID for splits plus recorded
+lap/interval analysis. Both read Garmin's cumulative distance/time stream,
+requesting up to 100,000 chart samples without route coordinates. They do not
+rename manual laps, mile laps, or interval reps as kilometres.
+
+The `kilometre_splits.km_splits` array contains each 1,000 m segment and the
+final partial segment, with numeric moving/elapsed/stopped seconds, cumulative
+times, pace in seconds/km and `m:ss`, and pace change versus the previous segment
+(positive means slower). Time-weighted average HR, maximum HR, cadence in total
+steps/minute, power, temperature and sample-estimated ascent/descent/net elevation
+plus start/end/minimum/maximum altitude in meters
+are included when recorded. Missing values are `null`; sensor coverage is reported
+per split. No generic HR zones or grade-adjusted paces are invented.
+
+The pacing summary compares equal-distance halves, reports fastest/slowest full
+kilometres and pace standard deviation, and labels an even split when the halves
+differ by at most 2%. The partial final kilometre is excluded from full-km
+comparisons. HR drift and speed/HR aerobic decoupling require at least 80% usable
+HR coverage in each half. These are descriptive comparisons, not evidence of a
+medical problem or a definitive fitness assessment, especially on hills, in heat,
+or during intervals. Recorded work/recovery laps remain separate in run analysis.
+
+Boundaries and sensor values are interpolated between samples, so results are
+estimates at the recording resolution, not FIT-file-exact splits. Units come from
+Garmin's descriptors, not their encoding `factor`. `data_quality.status` describes
+timing coverage, not sensor completeness: missing start/end coverage leaves
+unbracketed splits unavailable, gaps longer than 30 seconds produce warnings,
+and missing moving time switches pace explicitly to elapsed time (including
+pauses). Samples are never extrapolated or replaced with activity/lap averages.
+The splits-only tool returns an error if no segment can be calculated; run analysis
+can still return its recorded laps with an explicit unavailable-splits warning.
+
+Rebuild and reconnect the MCP server to discover the new tool. If using the
+native Copilot extension, also rerun `npm run install:copilot` and reload extensions
+to enable capture of the new tool and kilometre charts.
 
 ### Women's training and menstrual health
 

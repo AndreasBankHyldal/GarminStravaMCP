@@ -1,5 +1,6 @@
 import type { formatGarminActivityDetails } from "../garmin/format.js";
 import type { LapAnalysis } from "../utils.js";
+import type { KilometreSplits } from "../garmin/splits.js";
 import type { Chart, Color, Metric, Point, Report } from "./model.js";
 
 const unavailable = "Unavailable";
@@ -36,6 +37,8 @@ function report(title: string, subtitle: string, metrics: Metric[], charts: Char
 
 export interface RunReportData {
   source: string;
+  activity_id?: number;
+  kilometre_splits?: KilometreSplits;
   activity: {
     name: string;
     date: { human: string };
@@ -66,19 +69,39 @@ export function runReport(data: RunReportData): Report {
     label: lapLabel(lap), value: paceSeconds(lap.pace_per_km), color: lapColor(lap.name),
   })), "blue", "bar", "Lower is faster. Warmup and recovery remain separate from work reps; these are recorded laps, not necessarily kilometre splits.");
   pace.format = "pace";
-  const charts = [
+  const charts = data.kilometre_splits && !laps.length ? [] : [
     pace,
     chart("lap-hr", "Heart rate by lap", "bpm", laps.map(lap => ({ label: lapLabel(lap), value: positive(lap.avg_hr) })), "red", "line", "Average heart rate for each recorded lap. Missing readings are gaps, not zero."),
   ];
   const notes: string[] = [];
+  if (data.kilometre_splits) {
+    const { km_splits: splits, pacing_summary: summary, data_quality: quality } = data.kilometre_splits;
+    const label = (split: typeof splits[number]) => split.is_partial ? `km ${split.start_km}-${split.end_km} (partial)` : `km ${split.km}`;
+    const kmPace = chart("km-pace", "Pace by kilometre", "min/km", splits.map(split => ({
+      label: label(split), value: split.pace_seconds_per_km,
+    })), "blue", "bar", `Lower is faster. Based on ${quality.pace_time_basis ?? "unavailable"} time; boundaries are interpolated from recorded distance samples.`);
+    kmPace.format = "pace";
+    charts.unshift(
+      kmPace,
+      chart("km-hr", "Heart rate by kilometre", "bpm", splits.map(split => ({
+        label: label(split), value: split.avg_heartrate,
+      })), "red", "line", "Time-weighted average over valid readings. Check coverage in the original JSON before comparing splits."),
+      chart("km-elevation", "Net elevation by kilometre", "m", splits.map(split => ({
+        label: label(split), value: split.net_elevation_m,
+      })), "purple", "bar", "Sample-estimated net elevation change; not grade-adjusted pace."),
+    );
+    notes.push(...quality.warnings, ...(summary?.notes ?? []));
+    if (summary) notes.push(`Pacing: ${summary.strategy.replaceAll("_", " ")} (even means within 2% between equal-distance halves). Fastest full km: ${summary.fastest_full_km ?? unavailable}; slowest: ${summary.slowest_full_km ?? unavailable}.`);
+    if (quality.status === "unavailable") notes.push("Kilometre analysis unavailable; recorded laps below are not a substitute for kilometre splits.");
+  }
   if (data.laps?.interval_summary) notes.push(data.laps.interval_summary);
-  if (!laps.length) notes.push("Lap charts are unavailable: Garmin did not provide a multi-lap breakdown.");
+  if (!laps.length && !data.kilometre_splits) notes.push("Lap charts are unavailable: Garmin did not provide a multi-lap breakdown.");
   if (data.interval_consistency) notes.push(`Work-rep consistency: ${data.interval_consistency.rating} across ${data.interval_consistency.rep_count} reps.`);
   if (data.hr_drift) {
     charts.push(chart("hr-drift", "Heart-rate drift", "bpm", [
       { label: "First half", value: data.hr_drift.first_half_avg },
       { label: "Second half", value: data.hr_drift.second_half_avg },
-    ], "red", "bar", `${data.hr_drift.drift_percent}% change between halves. Changes in pace, terrain, and interval structure can also affect this comparison.`));
+    ], "red", "bar", `${data.hr_drift.drift_percent}% change between halves. ${data.hr_drift.assessment}`));
   }
   return report(activity.name, activity.date.human, [
     metric("Distance", activity.distance_km, "blue", "km"),
@@ -95,11 +118,13 @@ export function activityReport(data: Omit<RunReportData["activity"], "total_time
   moving_duration: string;
   pace_per_km: string;
   laps: LapAnalysis | null;
+  kilometre_splits?: KilometreSplits;
 }): Report {
   return runReport({
     source: data.source,
     activity: { ...data, total_time: data.moving_duration, avg_pace: data.pace_per_km },
     laps: data.laps ?? undefined,
+    kilometre_splits: data.kilometre_splits,
   });
 }
 

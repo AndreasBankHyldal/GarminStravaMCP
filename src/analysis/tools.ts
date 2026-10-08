@@ -3,6 +3,7 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 import { getDb } from "../db/database.js";
 import * as garminClient from "../garmin/client.js";
+import { buildKilometreSplits } from "../garmin/splits.js";
 import {
   formatGarminActivityDetails,
   hasGarminIntervalStructure,
@@ -31,106 +32,36 @@ function paceConsistency(paces: number[]) {
   };
 }
 
-function heartRateDrift(heartRates: number[], times?: number[]) {
-  if (heartRates.length < 2) return null;
-
-  let firstHalf: number[];
-  let secondHalf: number[];
-  if (times?.length === heartRates.length) {
-    const samples = heartRates
-      .map((heartRate, index) => ({ heartRate, time: times[index] }))
-      .filter(
-        (sample) =>
-          Number.isFinite(sample.heartRate) &&
-          sample.heartRate > 0 &&
-          Number.isFinite(sample.time)
-      );
-    if (samples.length < 2) return null;
-    const temporalMidpoint =
-      (samples[0].time + samples[samples.length - 1].time) / 2;
-    firstHalf = samples
-      .filter((sample) => sample.time <= temporalMidpoint)
-      .map((sample) => sample.heartRate);
-    secondHalf = samples
-      .filter((sample) => sample.time > temporalMidpoint)
-      .map((sample) => sample.heartRate);
-  } else {
-    const validHeartRates = heartRates.filter(
-      (heartRate) => Number.isFinite(heartRate) && heartRate > 0
-    );
-    const sampleMidpoint = Math.floor(validHeartRates.length / 2);
-    firstHalf = validHeartRates.slice(0, sampleMidpoint);
-    secondHalf = validHeartRates.slice(sampleMidpoint);
-  }
-  if (!firstHalf.length || !secondHalf.length) return null;
-
-  const firstHalfAverage = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-  if (firstHalfAverage <= 0) return null;
-  const secondHalfAverage = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-  const drift = ((secondHalfAverage - firstHalfAverage) / firstHalfAverage) * 100;
-
-  return {
-    first_half_avg: Math.round(firstHalfAverage),
-    second_half_avg: Math.round(secondHalfAverage),
-    drift_percent: drift.toFixed(1),
-    assessment:
-      Math.abs(drift) < 3
-        ? "Minimal drift - good aerobic fitness"
-        : drift < 5
-        ? "Normal drift"
-        : "Significant drift - may indicate dehydration or insufficient base fitness",
-  };
-}
-
-function garminMetricSeries(
-  chart: garminClient.GarminActivityChart,
-  metricKey: string
-): number[] {
-  const descriptor = chart.metricDescriptors?.find((item) => item.key === metricKey);
+function garminElevationSeries(chart: garminClient.GarminActivityChart): number[] {
+  const descriptor = chart.metricDescriptors?.find(item => item.key === "directCorrectedElevation") ??
+    chart.metricDescriptors?.find(item => item.key === "directElevation");
   if (!descriptor) return [];
 
+  const unit = descriptor.unit?.key.toLowerCase();
+  const multiplier = unit === "meter" || unit === "meters" || unit === "m" ? 1 :
+    unit === "centimeter" || unit === "cm" ? 0.01 : unit === "kilometer" || unit === "km" ? 1000 : null;
+  if (multiplier === null) return [];
   return (chart.activityDetailMetrics ?? [])
     .map((row) => row.metrics[descriptor.metricsIndex])
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .map(value => value * multiplier);
 }
 
-function garminMetricSamples(
-  chart: garminClient.GarminActivityChart,
-  metricKey: string,
-  timeKey: string
-): Array<{ value: number; time: number }> {
-  const metricDescriptor = chart.metricDescriptors?.find(
-    (item) => item.key === metricKey
-  );
-  const timeDescriptor = chart.metricDescriptors?.find(
-    (item) => item.key === timeKey
-  );
-  if (!metricDescriptor || !timeDescriptor) return [];
-
-  return (chart.activityDetailMetrics ?? [])
-    .map((row) => ({
-      value: row.metrics[metricDescriptor.metricsIndex],
-      time: row.metrics[timeDescriptor.metricsIndex],
-    }))
-    .filter(
-      (sample): sample is { value: number; time: number } =>
-        typeof sample.value === "number" &&
-        Number.isFinite(sample.value) &&
-        sample.value > 0 &&
-        typeof sample.time === "number" &&
-        Number.isFinite(sample.time)
-    );
-}
-
-async function analyzeGarminRun(activityId: number) {
+export async function analyzeGarminRun(
+  activityId: number,
+  api: Pick<typeof garminClient, "getActivityDetails" | "getActivitySplits" | "getActivityChart"> = garminClient
+) {
   const [activity, splits, chart] = await Promise.all([
-    garminClient.getActivityDetails(activityId),
-    garminClient.getActivitySplits(activityId),
-    garminClient.getActivityChart(activityId),
+    api.getActivityDetails(activityId),
+    api.getActivitySplits(activityId),
+    api.getActivityChart(activityId, 100_000),
   ]);
   const detail = formatGarminActivityDetails(activity, splits);
+  const kilometreSplits = buildKilometreSplits(chart, activity.summaryDTO.distance, hasGarminIntervalStructure(activity, splits.lapDTOs ?? []));
   const analysis: RunReportData = {
     source: "garmin",
+    activity_id: activityId,
+    kilometre_splits: kilometreSplits,
     activity: {
       name: detail.name,
       date: detail.date,
@@ -179,24 +110,21 @@ async function analyzeGarminRun(activityId: number) {
     };
   }
 
-  const heartRateSamples = garminMetricSamples(
-    chart,
-    "directHeartRate",
-    "sumMovingDuration"
-  );
-  const hrDrift = heartRateDrift(
-    heartRateSamples.map((sample) => sample.value),
-    heartRateSamples.map((sample) => sample.time)
-  );
-  if (hrDrift) {
-    analysis.hr_drift = hrDrift;
+  const pacing = kilometreSplits.pacing_summary;
+  if (pacing?.hr_drift_percent != null && pacing.first_half_avg_heartrate !== null && pacing.second_half_avg_heartrate !== null) {
+    analysis.hr_drift = {
+      first_half_avg: Math.round(pacing.first_half_avg_heartrate),
+      second_half_avg: Math.round(pacing.second_half_avg_heartrate),
+      drift_percent: pacing.hr_drift_percent.toFixed(1),
+      assessment: "Time-weighted HR change between equal-distance halves. Interpret alongside pace, terrain, heat and workout structure; this alone does not establish fitness or fatigue.",
+    };
   }
 
-  const elevation = garminMetricSeries(chart, "directElevation");
+  const elevation = garminElevationSeries(chart);
   if (elevation.length) {
     analysis.elevation = {
-      min_m: Math.round(Math.min(...elevation)),
-      max_m: Math.round(Math.max(...elevation)),
+      min_m: Math.round(elevation.reduce((min, value) => Math.min(min, value), Infinity)),
+      max_m: Math.round(elevation.reduce((max, value) => Math.max(max, value), -Infinity)),
       total_gain: detail.elevation_gain_m,
     };
   }
@@ -209,17 +137,17 @@ export function registerAnalysisTools(server: McpServer): void {
     server,
     "analyze_run_performance",
     {
-      description: "Analyze a Garmin run: pace consistency, HR drift, laps, and interval/recovery structure. Includes an interactive lap-pace and heart-rate dashboard in MCP Apps clients.",
-      inputSchema: { activity_id: z.number().describe("Garmin activity ID") },
+      description: "Complete all-in-one tool for run analysis or run performance: returns kilometre splits, moving/elapsed pace and pauses, HR averages/maxima and drift/decoupling, elevation gain/loss and altitude in meters, cadence, power, temperature, activity metrics and recorded interval/recovery laps when available. Pass the requested Garmin activity_id; if unknown, find the run with garmin_get_activities or garmin_search_activities first. Includes final partial km, pacing consistency, equal-distance half comparisons and explicit data-quality caveats. No separate details, HR-data or km-splits call is needed for these measurements. Includes one interactive performance dashboard.",
+      inputSchema: { activity_id: z.number().int().positive().describe("Garmin activity ID") },
       _meta: reportToolMeta,
     },
     async ({ activity_id }) => {
       try {
         const analysis = await analyzeGarminRun(activity_id);
         return reportResult(analysis, runReport(analysis));
-      } catch (err: any) {
+      } catch (error: unknown) {
         return {
-          content: [{ type: "text", text: `Error: ${err.message}` }],
+          content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
           isError: true,
         };
       }

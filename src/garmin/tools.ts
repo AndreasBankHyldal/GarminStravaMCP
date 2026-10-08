@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 import * as garminClient from "./client.js";
+import { buildKilometreSplits } from "./splits.js";
 import { formatDuration } from "../utils.js";
 import { reportResult, reportToolMeta } from "../presentation/resource.js";
 import { activityReport, zonesReport } from "../presentation/reports.js";
@@ -12,7 +13,42 @@ import {
   getGarminMovingSpeed,
 } from "./format.js";
 
-export function registerGarminTools(server: McpServer): void {
+export function registerGarminTools(
+  server: McpServer,
+  splitClient: Pick<typeof garminClient, "getActivityDetails" | "getActivityChart"> = garminClient
+): void {
+  registerAppTool(
+    server,
+    "garmin_get_km_splits",
+    {
+      description: "Use for splits-only requests; use analyze_run_performance instead for a full run analysis (it already includes these splits). Get actual kilometre-by-kilometre distance splits for a Garmin activity ID, independent of recorded lap length. Includes the final partial km, moving/elapsed times and pace, pauses, cumulative times, pace changes, time-weighted HR, cadence, power, temperature and elevation when recorded; pacing/HR half comparisons and explicit coverage/quality warnings. Boundaries are interpolated from Garmin distance/time samples, never fabricated from lap averages.",
+      inputSchema: { activity_id: z.number().int().positive().describe("The Garmin activity ID") },
+      _meta: reportToolMeta,
+    },
+    async ({ activity_id }) => {
+      try {
+        const [activity, chart] = await Promise.all([
+          splitClient.getActivityDetails(activity_id),
+          splitClient.getActivityChart(activity_id, 100_000),
+        ]);
+        const kilometre_splits = buildKilometreSplits(chart, activity.summaryDTO.distance, activity.metadataDTO?.hasIntensityIntervals);
+        if (kilometre_splits.data_quality.status === "unavailable") {
+          throw new Error(kilometre_splits.data_quality.warnings.join(" "));
+        }
+        const formatted = {
+          ...formatGarminActivityDetails(activity, { activityId: activity_id }),
+          kilometre_splits,
+        };
+        return reportResult(formatted, activityReport(formatted));
+      } catch (error: unknown) {
+        return {
+          content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
   server.tool(
     "garmin_get_activities",
     "Fetch recent activities from Garmin Connect.",
