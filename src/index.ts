@@ -57,7 +57,10 @@ Activities include effort level classification and heart rate zone information.
 
 Tips:
 - Use garmin_get_activities to browse recent runs
-- Use analyze_run_performance for deep analysis of a Garmin activity
+- For run-analysis or run-performance requests, always use analyze_run_performance with the requested activity_id for the complete all-in-one report: kilometre splits, moving/elapsed pace and pauses, HR averages/maxima and drift, elevation/altitude in meters, cadence, power, temperature, activity metrics and recorded interval laps. Do not narrow a run-performance request to a splits-only report or call separate details/splits tools first to duplicate this data
+- If the user identifies a run by date, name or "latest run" rather than ID, find the running activity with garmin_get_activities or garmin_search_activities, then call analyze_run_performance. Ask the user to choose if multiple runs match; never guess an activity ID
+- Use garmin_get_km_splits when the user specifically requests kilometre splits rather than a full run analysis; recorded laps may be miles or intervals
+- Check split data-quality warnings and sensor coverage; never infer missing kilometre paces from lap averages
 - Use garmin_get_personal_records to find all-time bests
 - Use garmin_search_activities to find specific activities
 - Use garmin_get_heart_rate_zones before making heart-rate-based training recommendations
@@ -145,16 +148,18 @@ server.prompt(
       content: {
         type: "text",
         text: `Do a deep dive analysis of Garmin activity ${activity_id}. Please:
-1. Fetch the activity details with garmin_get_activity_details
-2. Analyze the run with analyze_run_performance
+1. Call analyze_run_performance with activity_id ${activity_id} for the complete all-in-one report: kilometre splits, pace/timing, HR, elevation/altitude in meters, cadence, power, temperature and recorded laps when available
+2. Check kilometre_splits.data_quality and metric coverage before interpreting the results. Do not fetch garmin_get_activity_details or garmin_get_km_splits again for the same data
 3. Assess:
-   - Pacing strategy (even splits? negative split? fade?)
-   - Heart rate drift and what it indicates about fitness/fatigue
+   - Pacing strategy from kilometre_splits (even splits? negative split? fade?), including partial-km and data-quality caveats
+   - Heart rate drift/decoupling alongside pace, terrain and workout structure, without diagnosing fitness/fatigue from HR alone
    - Effort level relative to the workout type
+   - Per-kilometre HR and elevation gain/loss/altitude, pauses and available cadence/power/temperature
    - Any notable patterns in the data
 4. Compare to similar recent workouts if possible
 5. Rate the overall execution of this run and suggest what to focus on next
-6. Use the returned interactive lap-pace and heart-rate dashboard when supported; don't replace it with a duplicate table`,
+6. Use the returned interactive kilometre-pace and heart-rate dashboard when supported; keep interval laps separate and don't replace charts with a duplicate table
+7. Treat HR drift/decoupling as descriptive; consider changes in pace, terrain and conditions before attributing them to fitness or fatigue`,
       },
     }],
   })

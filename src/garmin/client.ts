@@ -288,6 +288,7 @@ export interface GarminActivityChart {
   metricDescriptors?: Array<{
     metricsIndex: number;
     key: string;
+    unit?: { key: string; factor?: number };
   }>;
   activityDetailMetrics?: Array<{
     metrics: Array<number | null>;
@@ -331,10 +332,10 @@ export async function getActivitySplits(activityId: number): Promise<GarminActiv
   return withRetry(gc => gc.get(`${gc.url.ACTIVITY}${activityId}/splits`));
 }
 
-export async function getActivityChart(activityId: number): Promise<GarminActivityChart> {
+export async function getActivityChart(activityId: number, maxChartSize = 2000): Promise<GarminActivityChart> {
   return withRetry(gc =>
     gc.get(`${gc.url.ACTIVITY}${activityId}/details`, {
-      params: { maxChartSize: 2000, maxPolylineSize: 0 },
+      params: { maxChartSize, maxPolylineSize: 0 },
     })
   );
 }

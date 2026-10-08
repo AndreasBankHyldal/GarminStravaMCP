@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { reportSchema, REPORT_META_KEY } from "./model.js";
+import { kilometreSplitsSchema } from "../garmin/splits.js";
 import { activityReport, loadReport, raceReport, readinessReport, runReport, trendsReport, weeklyReport, zonesReport } from "./reports.js";
 
 const nullableNumber = z.number().finite().nullable();
@@ -19,6 +20,8 @@ const activity = z.object({
 });
 const run = z.object({
   source: z.string(),
+  activity_id: z.number().optional(),
+  kilometre_splits: kilometreSplitsSchema.optional(),
   activity: activity.extend({ total_time: z.string(), avg_pace: z.string() }),
   laps: laps.optional(),
   interval_consistency: z.object({
@@ -31,6 +34,7 @@ const run = z.object({
 });
 const details = activity.extend({
   id: z.number(), source: z.string(), type: z.string(),
+  kilometre_splits: kilometreSplitsSchema.optional(),
   date: date.extend({ iso: z.string(), day_of_week: z.string(), days_ago: z.number() }),
   duration: z.string(), moving_duration: z.string(), moving_time_seconds: z.number(),
   pace_per_km: z.string(), effort_level: z.string().nullable(), hr_zone: z.string().nullable(),
@@ -89,6 +93,7 @@ const race = z.object({
 const adapters = {
   analyze_run_performance: (data: unknown) => runReport(run.parse(data)),
   garmin_get_activity_details: (data: unknown) => activityReport(details.parse(data)),
+  garmin_get_km_splits: (data: unknown) => activityReport(details.extend({ kilometre_splits: kilometreSplitsSchema }).parse(data)),
   get_training_trends: (data: unknown) => trendsReport(trends.parse(data)),
   garmin_get_heart_rate_zones: (data: unknown) => zonesReport(zones.parse(data)),
   get_load_fatigue_model: (data: unknown) => loadReport(load.parse(data)),

@@ -26,6 +26,7 @@ test("MCP lists dashboard links and a sandboxed resource without requiring UI ca
       "analyze_run_performance", "get_training_trends", "race_day_strategy",
       "get_load_fatigue_model", "get_readiness_score", "weekly_coach_brief",
       "garmin_get_activity_details", "garmin_get_heart_rate_zones",
+      "garmin_get_km_splits",
     ];
     for (const name of dashboardTools) {
       const tool = tools.find(tool => tool.name === name);
