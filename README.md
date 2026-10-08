@@ -285,12 +285,22 @@ timing coverage, not sensor completeness: missing start/end coverage leaves
 unbracketed splits unavailable, gaps longer than 30 seconds produce warnings,
 and missing moving time switches pace explicitly to elapsed time (including
 pauses). Samples are never extrapolated or replaced with activity/lap averages.
+Garmin can record a small initial GPS increment at zero elapsed/moving time.
+When it is at most 10 m, the origin is anchored at that recorded timer start
+with an explicit warning. Final distance differences of at most 0.01 m are
+reconciled to the summary's decimal precision without changing recorded time.
+Neither adjustment fills a genuinely missing start or end.
 The splits-only tool returns an error if no segment can be calculated; run analysis
 can still return its recorded laps with an explicit unavailable-splits warning.
 
 Rebuild and reconnect the MCP server to discover the new tool. If using the
 native Copilot extension, also rerun `npm run install:copilot` and reload extensions
 to enable capture of the new tool and kilometre charts.
+
+If merged changes still return the old report without `kilometre_splits`,
+pulling source alone is not enough: run `npm run build` in the checkout used by
+the MCP client's configured `dist/index.js` command, then restart/reconnect that
+MCP server. Reloading the canvas extension does not restart the Garmin MCP server.
 
 ### Women's training and menstrual health
 

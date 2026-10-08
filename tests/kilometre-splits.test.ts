@@ -200,6 +200,34 @@ test("missing start/end coverage never fabricates a first or final split", () =>
   assert.equal(buildKilometreSplits(chart([[500, 150, 150], [900, 270, 270]]), 1000).data_quality.status, "unavailable");
 });
 
+test("Garmin's small GPS increment at timer start and rounded final distance retain every split", () => {
+  const race = buildKilometreSplits(chart([
+    [2.2100000381469727, 0, 0, 140, 165, 32.8],
+    [1000, 300, 300, 150, 165, 8],
+    [2000, 600, 600, 160, 165, 49.4],
+    [23328.0595703125, 7000, 7000, 190, 165, 49.4],
+  ]), 23328.06);
+  assert.equal(race.data_quality.status, "complete");
+  assert.equal(race.km_splits[0].pace_per_km, "5:00");
+  assert.equal(race.km_splits[0].avg_heartrate, 145);
+  assert.ok(race.km_splits.every(split => split.pace_per_km !== null && split.avg_heartrate !== null));
+  assert.equal(race.pacing_summary?.full_km_count, 23);
+  assert.ok(race.pacing_summary?.hr_drift_percent !== null);
+  assert.match(race.data_quality.warnings.join(" "), /anchored at the recorded timer start/);
+  assert.match(race.data_quality.warnings.join(" "), /0.01 m numeric precision/);
+});
+
+test("start/end reconciliation never hides real missing coverage", () => {
+  for (const [distance, elapsed] of [[2.21, 1], [10.01, 0]]) {
+    const incomplete = buildKilometreSplits(chart([[distance, elapsed, elapsed, 140], [1000, 300, 300, 150]]), 1000);
+    assert.equal(incomplete.data_quality.status, "unavailable");
+    assert.equal(incomplete.km_splits[0].pace_per_km, null);
+  }
+  const missingEnd = buildKilometreSplits(chart([[0, 0, 0, 140], [1000, 300, 300, 150], [1999, 600, 600, 160]]), 2000);
+  assert.equal(missingEnd.data_quality.status, "partial");
+  assert.equal(missingEnd.km_splits[1].pace_per_km, null);
+});
+
 test("rejects backwards samples, impossible clocks and invalid distance", () => {
   for (const rows of [
     [[0, 0, 0], [1000, 300, 300], [500, 400, 400]],
