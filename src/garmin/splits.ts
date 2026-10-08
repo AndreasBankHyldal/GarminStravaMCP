@@ -216,6 +216,22 @@ export function buildKilometreSplits(chart: GarminActivityChart, distanceMeters:
   };
   if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) throw new Error("Garmin activity has no positive distance to split.");
   if (!samples.length) return result;
+  const firstSample = samples[0];
+  // Garmin can include the first GPS increment in the sample at timer start.
+  if (firstSample.distance > 0 && firstSample.distance <= 10 &&
+      firstSample.elapsed === 0 && (firstSample.moving === null || firstSample.moving === 0) &&
+      chart.metricDescriptors?.some(descriptor => descriptor.key === "sumElapsedDuration")) {
+    warnings.push(`Garmin's zero-time start sample contains a ${firstSample.distance.toFixed(3)} m initial GPS increment; the distance origin is anchored at the recorded timer start.`);
+    firstSample.distance = 0;
+  }
+  const lastSample = samples.at(-1)!;
+  const finalDistanceError = Math.abs(lastSample.distance - distanceMeters);
+  // Summary distance is decimal-rounded while the chart can contain float32 values.
+  if (finalDistanceError > 0 && finalDistanceError <= 0.01 &&
+      distanceMeters > samples[samples.length - 2].distance) {
+    warnings.push("The final stream distance is reconciled with the activity summary within 0.01 m numeric precision; the recorded final time is unchanged.");
+    lastSample.distance = distanceMeters;
+  }
   const basis = samples[0].moving === null ? "elapsed" : "moving";
   result.data_quality.pace_time_basis = basis;
   let maxGap = 0;
