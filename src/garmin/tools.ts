@@ -4,6 +4,7 @@ import { z } from "zod";
 import * as garminClient from "./client.js";
 import { buildKilometreSplits } from "./splits.js";
 import { formatDuration } from "../utils.js";
+import { matchesActivityTypeFilter } from "../cycling/activity-type.js";
 import { reportResult, reportToolMeta } from "../presentation/resource.js";
 import { activityReport, zonesReport } from "../presentation/reports.js";
 import {
@@ -77,16 +78,14 @@ export function registerGarminTools(
     "Scan all Garmin activities to find personal records: highest HR, fastest pace, longest run, most elevation, etc. Can scan up to 500 activities.",
     {
       max_activities: z.number().min(10).max(500).default(200).describe("Max activities to scan"),
-      activity_type: z.string().optional().describe("Filter by type (e.g. 'running', 'cycling')"),
+      activity_type: z.string().optional().describe("Filter by type (e.g. 'running'); 'cycling', 'bike' or 'ride' match every cycling type (road, gravel, MTB, indoor, virtual, e-bike)"),
     },
     async ({ max_activities, activity_type }) => {
       try {
         let activities = await garminClient.getAllActivities(max_activities);
 
         if (activity_type) {
-          activities = activities.filter(
-            (a) => a.activityType?.typeKey?.toLowerCase().includes(activity_type.toLowerCase())
-          );
+          activities = activities.filter((a) => matchesActivityTypeFilter(a.activityType?.typeKey, activity_type));
         }
 
         if (activities.length === 0) {
@@ -163,7 +162,7 @@ export function registerGarminTools(
     "Search through all Garmin activities with flexible filters. Useful for finding specific activities or answering questions like 'my fastest 5K' or 'runs over 15km'.",
     {
       max_activities: z.number().min(10).max(500).default(200).describe("Max activities to scan"),
-      activity_type: z.string().optional().describe("Filter by type (e.g. 'running')"),
+      activity_type: z.string().optional().describe("Filter by type (e.g. 'running'); 'cycling', 'bike' or 'ride' match every cycling type (road, gravel, MTB, indoor, virtual, e-bike)"),
       min_distance_km: z.number().optional().describe("Minimum distance in km"),
       max_distance_km: z.number().optional().describe("Maximum distance in km"),
       min_hr: z.number().optional().describe("Minimum average heart rate"),
@@ -179,9 +178,7 @@ export function registerGarminTools(
         let activities = await garminClient.getAllActivities(max_activities);
 
         if (activity_type) {
-          activities = activities.filter(
-            (a) => a.activityType?.typeKey?.toLowerCase().includes(activity_type.toLowerCase())
-          );
+          activities = activities.filter((a) => matchesActivityTypeFilter(a.activityType?.typeKey, activity_type));
         }
         if (min_distance_km) {
           activities = activities.filter((a) => a.distance / 1000 >= min_distance_km);

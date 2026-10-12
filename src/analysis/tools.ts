@@ -10,6 +10,7 @@ import {
 } from "../garmin/format.js";
 import { speedToPacePerKm, formatDuration, startOfWeek } from "../utils.js";
 import { buildTrainingTrends } from "./trends.js";
+import { isCyclingType } from "../cycling/activity-type.js";
 import { reportResult, reportToolMeta } from "../presentation/resource.js";
 import { loadReport, raceReport, readinessReport, runReport, trendsReport, weeklyReport, type RunReportData } from "../presentation/reports.js";
 
@@ -131,6 +132,10 @@ export async function analyzeGarminRun(
 
   return analysis;
 }
+
+const sportInput = z.enum(["running", "cycling", "running_and_cycling"]).default("running")
+  .describe("Which activities contribute training load");
+type LoadSport = z.infer<typeof sportInput>;
 
 export function registerAnalysisTools(server: McpServer): void {
   registerAppTool(
@@ -374,17 +379,21 @@ export function registerAnalysisTools(server: McpServer): void {
     server,
     "get_load_fatigue_model",
     {
-      description: "Compute CTL/ATL/TSB-style training load model and fatigue risk from recent running activities. Includes interactive fitness, fatigue, and balance charts in MCP Apps clients.",
-      inputSchema: { days: z.number().min(21).max(180).default(90).describe("How many days to include in the model") },
+      description: "Compute CTL/ATL/TSB-style training load model and fatigue risk from recent running activities (or rides / both with sport). Load is heart-rate weighted duration, so running and cycling can be combined; for power/TSS-based cycling fitness use get_cycling_fitness_model. Includes interactive fitness, fatigue, and balance charts in MCP Apps clients.",
+      inputSchema: {
+        days: z.number().min(21).max(180).default(90).describe("How many days to include in the model"),
+        sport: sportInput,
+      },
       _meta: reportToolMeta,
     },
-    async ({ days }) => {
+    async ({ days, sport }) => {
       try {
-        const runs = await fetchRunSamples(days);
+        const runs = await fetchRunSamples(days, sport);
         const loadModel = computeLoadModel(runs, days);
         const result = {
           source: "garmin",
           days,
+          sport,
           runs_analyzed: runs.length,
           model: loadModel,
         };
@@ -402,13 +411,13 @@ export function registerAnalysisTools(server: McpServer): void {
     server,
     "get_readiness_score",
     {
-      description: "Create a daily readiness score from recovery metrics (sleep, HRV, resting HR) and training load state. Includes an interactive score-contribution dashboard in MCP Apps clients.",
-      inputSchema: {},
+      description: "Create a daily readiness score from recovery metrics (sleep, HRV, resting HR) and training load state. Set sport to include cycling load for cyclists and multi-sport athletes. Includes an interactive score-contribution dashboard in MCP Apps clients.",
+      inputSchema: { sport: sportInput },
       _meta: reportToolMeta,
     },
-    async () => {
+    async ({ sport }) => {
       try {
-        const runs = await fetchRunSamples(42);
+        const runs = await fetchRunSamples(42, sport);
         const loadModel = computeLoadModel(runs, 42);
 
         const [sleepRaw, hrvRaw, hrRaw, trainingStatusRaw] = await Promise.all([
@@ -508,6 +517,7 @@ export function registerAnalysisTools(server: McpServer): void {
             : "easy_or_rest_day_recommended";
 
         const result = {
+          sport,
           readiness_score: Math.round(score),
           recommendation,
           components,
@@ -871,7 +881,7 @@ type RunSample = {
   name?: string;
 };
 
-async function fetchRunSamples(days: number): Promise<RunSample[]> {
+async function fetchRunSamples(days: number, sport: LoadSport = "running"): Promise<RunSample[]> {
   const afterDate = new Date();
   afterDate.setDate(afterDate.getDate() - days);
 
@@ -879,7 +889,10 @@ async function fetchRunSamples(days: number): Promise<RunSample[]> {
   return acts
     .filter((a) => {
       const type = a.activityType?.typeKey?.toLowerCase() ?? "";
-      return type.includes("run") && new Date(a.startTimeLocal) >= afterDate;
+      const running = type.includes("run");
+      const cycling = isCyclingType(type);
+      const included = sport === "running" ? running : sport === "cycling" ? cycling : running || cycling;
+      return included && new Date(a.startTimeLocal) >= afterDate;
     })
     .map((a) => ({
       date: a.startTimeLocal,

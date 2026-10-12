@@ -5,6 +5,7 @@ import { registerGarminTools } from "./garmin/tools.js";
 import { registerAnalysisTools } from "./analysis/tools.js";
 import { registerPlanningTools } from "./planning/tools.js";
 import { registerWomenTools } from "./women/tools.js";
+import { registerCyclingTools } from "./cycling/tools.js";
 import { config } from "./config.js";
 import { registerReportResource } from "./presentation/resource.js";
 
@@ -32,7 +33,7 @@ const server = new McpServer(
       resources: {},
       prompts: {},
     },
-    instructions: `This MCP server integrates with Garmin Connect to help with running training.
+    instructions: `This MCP server integrates with Garmin Connect to help with running and cycling training.
 
 Available capabilities:
 - Fetch and browse activities from Garmin Connect
@@ -50,7 +51,10 @@ Available capabilities:
 - Generate weekly coach brief with trend-based recommendations
 - Display interactive fitness dashboards through the native Garmin fitness extension in Copilot desktop, or MCP Apps in compatible clients, with unchanged JSON fallback
 - Auto-adjust training plans based on compliance and fatigue
-- Smart delta-sync training plans to Garmin calendar${womenCapabilities}
+- Smart delta-sync training plans to Garmin calendar
+- Analyze bike rides: speed, power (NP, IF, TSS, W/kg), power curve, power/HR zones, cadence, climbs and segments
+- Build a cycling power profile (FTP, best efforts, power zones), weekly cycling trends and a TSS-based fitness/fatigue/form model
+- Plan cycling events (power/IF targets, fueling) and create structured bike workouts with power, HR or cadence targets${womenCapabilities}
 
 All dates include day-of-week and human-readable format to avoid temporal confusion.
 Activities include effort level classification and heart rate zone information.
@@ -60,6 +64,11 @@ Tips:
 - For run-analysis or run-performance requests, always use analyze_run_performance with the requested activity_id for the complete all-in-one report: kilometre splits, moving/elapsed pace and pauses, HR averages/maxima and drift, elevation/altitude in meters, cadence, power, temperature, activity metrics and recorded interval laps. Do not narrow a run-performance request to a splits-only report or call separate details/splits tools first to duplicate this data
 - If the user identifies a run by date, name or "latest run" rather than ID, find the running activity with garmin_get_activities or garmin_search_activities, then call analyze_run_performance. Ask the user to choose if multiple runs match; never guess an activity ID
 - Use garmin_get_km_splits when the user specifically requests kilometre splits rather than a full run analysis; recorded laps may be miles or intervals
+- For bike rides (road, gravel, MTB, indoor/virtual, e-bike), always use analyze_ride_performance with the ride's activity_id instead of the run tools; find the ride with garmin_get_activities or garmin_search_activities (activity_type "cycling", which matches road, gravel, MTB, indoor, virtual and e-bike rides) when no ID is given, and never guess an ID
+- For FTP, power zones or power curve questions use get_cycling_power_profile; for cycling volume use get_cycling_trends; for cycling fitness/fatigue/form use get_cycling_fitness_model; for event pacing/fueling use cycling_event_strategy
+- Use garmin_add_cycling_workout for bike workouts (power, % FTP, heart-rate or cadence targets); garmin_add_running_workout is for runs only
+- For cyclists or multi-sport athletes, pass sport "cycling" or "running_and_cycling" to get_readiness_score and get_load_fatigue_model so ride load is counted
+- Ride power metrics need a power meter or smart trainer and intensity metrics need FTP; report missing data instead of inferring it
 - Check split data-quality warnings and sensor coverage; never infer missing kilometre paces from lap averages
 - Use garmin_get_personal_records to find all-time bests
 - Use garmin_search_activities to find specific activities
@@ -160,6 +169,56 @@ server.prompt(
 5. Rate the overall execution of this run and suggest what to focus on next
 6. Use the returned interactive kilometre-pace and heart-rate dashboard when supported; keep interval laps separate and don't replace charts with a duplicate table
 7. Treat HR drift/decoupling as descriptive; consider changes in pace, terrain and conditions before attributing them to fitness or fatigue`,
+      },
+    }],
+  })
+);
+
+server.prompt(
+  "ride-deep-dive",
+  "Deep dive into a specific bike ride with power, heart rate, cadence, climbs and segments.",
+  { activity_id: z.string().describe("Garmin activity ID of the ride") },
+  ({ activity_id }) => ({
+    messages: [{
+      role: "user",
+      content: {
+        type: "text",
+        text: `Do a deep dive analysis of Garmin ride ${activity_id}. Please:
+1. Call analyze_ride_performance with activity_id ${activity_id} for the complete ride report
+2. Check data_quality (coverage, pauses, summary-only) and whether power and FTP are available before interpreting
+3. Assess:
+   - Pacing and effort: normalized power, variability index, intensity factor and TSS relative to the ride's purpose
+   - Time in power and heart-rate zones: did the ride hit its intended intensity?
+   - Climbs: power, W/kg, VAM and HR on each climb, and how pacing changed between climbs
+   - Power:HR decoupling and efficiency factor (only meaningful for steady rides), cadence and coasting
+4. Compare with recent rides or get_cycling_power_profile if helpful
+5. Summarize what went well and one or two concrete focus points for the next ride
+6. Use the returned interactive ride dashboard when supported instead of duplicating every value in a table`,
+      },
+    }],
+  })
+);
+
+server.prompt(
+  "cycling-event-plan",
+  "Pacing, fueling and preparation plan for a cycling event.",
+  {
+    distance_km: z.string().describe("Event distance in km"),
+    elevation_gain_m: z.string().optional().describe("Total elevation gain in metres"),
+    event_type: z.string().optional().describe("time_trial, criterium, road_race, gran_fondo or ultra_endurance"),
+  },
+  ({ distance_km, elevation_gain_m, event_type }) => ({
+    messages: [{
+      role: "user",
+      content: {
+        type: "text",
+        text: `Help me prepare for a ${distance_km} km ${event_type ?? "gran_fondo"} cycling event${elevation_gain_m ? ` with ${elevation_gain_m} m of climbing` : ""}.
+
+1. Check my current form with get_cycling_fitness_model and my FTP/power curve with get_cycling_power_profile
+2. Call cycling_event_strategy for power targets, climb ceiling, phases and fueling
+3. Assess whether my recent volume (get_cycling_trends) supports the event duration, and flag gaps
+4. Suggest 2-3 key workouts for the coming weeks and offer to create them with garmin_add_cycling_workout
+5. Treat estimates (FTP from 20-minute power, duration from recent rides) as estimates and say so`,
       },
     }],
   })
@@ -279,6 +338,7 @@ registerGarminTools(server);
 registerAnalysisTools(server);
 registerPlanningTools(server);
 registerWomenTools(server);
+registerCyclingTools(server);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

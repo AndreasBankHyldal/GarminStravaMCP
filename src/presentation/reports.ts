@@ -208,6 +208,7 @@ interface LoadSnapshot {
 export function loadReport(data: {
   days: number;
   runs_analyzed: number;
+  sport?: string;
   model: { current: LoadSnapshot; daily_load: { date: string; load: number; ctl: number; atl: number; tsb: number }[] };
 }): Report {
   const { current, daily_load: days } = data.model;
@@ -216,7 +217,7 @@ export function loadReport(data: {
     { label: "Fitness (CTL)", color: "blue", points: days.map(day => ({ label: day.date, value: number(day.ctl) })) },
     { label: "Fatigue (ATL)", color: "orange", points: days.map(day => ({ label: day.date, value: number(day.atl) })) },
   ];
-  return report("Training load & balance", `${data.days}-day model / ${data.runs_analyzed} runs`, [
+  return report("Training load & balance", `${data.days}-day model / ${data.runs_analyzed} ${data.sport === "cycling" ? "rides" : data.sport === "running_and_cycling" ? "runs and rides" : "runs"}`, [
     metric("Fitness (CTL)", current.ctl),
     metric("Fatigue (ATL)", current.atl, "orange"),
     metric("Balance (TSB)", current.tsb, "purple"),

@@ -247,6 +247,20 @@ export interface GarminActivityDetails {
     trainingEffect?: number;
     anaerobicTrainingEffect?: number;
     activityTrainingLoad?: number;
+    // Cycling fields are only present when the device recorded them.
+    maxSpeed?: number;
+    elevationLoss?: number;
+    averagePower?: number;
+    maxPower?: number;
+    normalizedPower?: number;
+    trainingStressScore?: number;
+    intensityFactor?: number;
+    functionalThresholdPower?: number;
+    averageBikeCadence?: number;
+    maxBikeCadence?: number;
+    averageTemperature?: number;
+    totalWork?: number;
+    [key: string]: unknown;
   };
   splitSummaries?: GarminSplitSummary[] | null;
 }
@@ -263,6 +277,12 @@ export interface GarminLap {
   maxHR?: number;
   averageRunCadence?: number;
   elevationGain?: number;
+  elevationLoss?: number;
+  maxSpeed?: number;
+  averagePower?: number;
+  maxPower?: number;
+  normalizedPower?: number;
+  averageBikeCadence?: number;
 }
 
 export interface GarminActivitySplits {
@@ -348,6 +368,15 @@ export async function getHeartRateZones(): Promise<GarminHeartRateZoneProfile[]>
   return withRetry(gc =>
     gc.get(`${gc.url.GC_API}/biometric-service/heartRateZones`)
   );
+}
+
+/** Latest cycling FTP configured or auto-detected in Garmin Connect; null when none is set. */
+export async function getCyclingFtp(): Promise<number | null> {
+  const result = await withRetry(gc =>
+    gc.get(`${gc.url.GC_API}/biometric-service/biometric/latestFunctionalThresholdPower/CYCLING`)
+  ).catch(() => null) as { functionalThresholdPower?: unknown } | null;
+  const ftp = Number(result?.functionalThresholdPower);
+  return Number.isFinite(ftp) && ftp > 0 ? ftp : null;
 }
 
 export async function getSleepData(date?: Date): Promise<any> {
@@ -438,6 +467,7 @@ export interface GarminWorkoutPayload {
 }
 
 const SPORT_RUNNING = { sportTypeId: 1, sportTypeKey: "running" };
+const SPORT_CYCLING = { sportTypeId: 2, sportTypeKey: "cycling" };
 
 const STEP_TYPES: Record<string, { stepTypeId: number; stepTypeKey: string }> = {
   warmup:   { stepTypeId: 1, stepTypeKey: "warmup" },
@@ -462,6 +492,18 @@ const UNIT_KEYS: Record<string, { unitKey: string }> = {
 
 const TARGET_NONE = { workoutTargetTypeId: 1, workoutTargetTypeKey: "no.target" };
 const TARGET_PACE = { workoutTargetTypeId: 6, workoutTargetTypeKey: "pace.zone" };
+const RANGE_TARGETS = {
+  power: { workoutTargetTypeId: 2, workoutTargetTypeKey: "power.zone" },
+  cadence: { workoutTargetTypeId: 3, workoutTargetTypeKey: "cadence" },
+  heart_rate: { workoutTargetTypeId: 4, workoutTargetTypeKey: "heart.rate.zone" },
+} as const;
+
+/** Custom range target; power in watts, heart rate in bpm, cadence in rpm. */
+export interface WorkoutRangeTarget {
+  type: keyof typeof RANGE_TARGETS;
+  low: number;
+  high: number;
+}
 
 function makeStep(
   order: number,
@@ -473,6 +515,7 @@ function makeStep(
     description?: string | null;
     targetPaceMinPerKm?: number | null; // e.g. 5.5 for 5:30/km — min pace
     targetPaceMaxPerKm?: number | null; // max pace
+    target?: WorkoutRangeTarget;
   } = {}
 ): GarminWorkoutStep {
   const st = STEP_TYPES[stepType] ?? STEP_TYPES.interval;
@@ -480,7 +523,7 @@ function makeStep(
   const ec = END_CONDITIONS[endType] ?? END_CONDITIONS.lap_button;
   const unit = opts.unit ?? (endType === "distance" ? "meter" : endType === "time" ? "second" : "meter");
 
-  let targetType = TARGET_NONE;
+  let targetType: { workoutTargetTypeId: number; workoutTargetTypeKey: string } = TARGET_NONE;
   let targetValueOne: number | null = null;
   let targetValueTwo: number | null = null;
 
@@ -490,6 +533,10 @@ function makeStep(
     // Convert min/km to m/s (faster pace = higher m/s = lower min/km)
     targetValueOne = 1000 / (opts.targetPaceMaxPerKm * 60); // faster (higher m/s)
     targetValueTwo = 1000 / (opts.targetPaceMinPerKm * 60); // slower (lower m/s)
+  } else if (opts.target) {
+    targetType = RANGE_TARGETS[opts.target.type];
+    targetValueOne = Math.round(Math.min(opts.target.low, opts.target.high));
+    targetValueTwo = Math.round(Math.max(opts.target.low, opts.target.high));
   }
 
   return {
@@ -538,6 +585,77 @@ export interface WorkoutStepInput {
   repeat?: number; // if set, this step + the next "recovery" step repeat N times
 }
 
+export interface CyclingWorkoutStepInput {
+  type: WorkoutStepInput["type"];
+  distance_meters?: number;
+  duration_seconds?: number;
+  description?: string;
+  repeat?: number;
+  target?: WorkoutRangeTarget;
+}
+
+interface NormalizedStep extends CyclingWorkoutStepInput {
+  pace?: { min: number; max: number };
+}
+
+function endOptions(step: NormalizedStep) {
+  return {
+    endType: step.distance_meters ? "distance" as const : step.duration_seconds ? "time" as const : "lap_button" as const,
+    endValue: step.distance_meters ?? step.duration_seconds ?? null,
+    unit: step.distance_meters ? "meter" as const : "second" as const,
+    description: step.description,
+  };
+}
+
+function buildWorkout(
+  name: string,
+  description: string,
+  sport: { sportTypeId: number; sportTypeKey: string },
+  steps: NormalizedStep[]
+): GarminWorkoutPayload {
+  const workoutSteps: (GarminWorkoutStep | GarminRepeatStep)[] = [];
+  let order = 1;
+  let i = 0;
+
+  while (i < steps.length) {
+    const s = steps[i];
+    const mainOptions = {
+      ...endOptions(s),
+      targetPaceMinPerKm: s.pace?.min,
+      targetPaceMaxPerKm: s.pace?.max,
+      target: s.target,
+    };
+
+    // If this step has a repeat count, group it with the following recovery step
+    if (s.repeat && s.repeat > 1) {
+      const repeatChildren: GarminWorkoutStep[] = [makeStep(1, s.type, mainOptions)];
+
+      // Check if next step is recovery/rest — include it in the repeat group
+      if (i + 1 < steps.length && (steps[i + 1].type === "recovery" || steps[i + 1].type === "rest")) {
+        const recStep = steps[i + 1];
+        repeatChildren.push(makeStep(2, recStep.type, { ...endOptions(recStep), target: recStep.target }));
+        i++; // skip the recovery step
+      }
+
+      workoutSteps.push(makeRepeat(order++, s.repeat, repeatChildren));
+    } else {
+      workoutSteps.push(makeStep(order++, s.type, mainOptions));
+    }
+    i++;
+  }
+
+  return {
+    sportType: sport,
+    workoutName: name,
+    description,
+    workoutSegments: [{
+      segmentOrder: 1,
+      sportType: sport,
+      workoutSteps,
+    }],
+  };
+}
+
 /**
  * Build a structured Garmin workout from a list of step inputs.
  * Supports warmup, cooldown, intervals with repeats, recovery, rest, and pace targets.
@@ -547,63 +665,25 @@ export function buildStructuredWorkout(
   description: string,
   steps: WorkoutStepInput[]
 ): GarminWorkoutPayload {
-  const workoutSteps: (GarminWorkoutStep | GarminRepeatStep)[] = [];
-  let order = 1;
-  let i = 0;
+  return buildWorkout(name, description, SPORT_RUNNING, steps.map(step => ({
+    type: step.type,
+    distance_meters: step.distance_meters,
+    duration_seconds: step.duration_seconds,
+    description: step.description,
+    repeat: step.repeat,
+    pace: step.target_pace_min_per_km != null && step.target_pace_max_per_km != null
+      ? { min: step.target_pace_min_per_km, max: step.target_pace_max_per_km }
+      : undefined,
+  })));
+}
 
-  while (i < steps.length) {
-    const s = steps[i];
-
-    // If this step has a repeat count, group it with the following recovery step
-    if (s.repeat && s.repeat > 1) {
-      const intervalStep = makeStep(1, s.type, {
-        endType: s.distance_meters ? "distance" : s.duration_seconds ? "time" : "lap_button",
-        endValue: s.distance_meters ?? s.duration_seconds ?? null,
-        unit: s.distance_meters ? "meter" : "second",
-        description: s.description,
-        targetPaceMinPerKm: s.target_pace_min_per_km,
-        targetPaceMaxPerKm: s.target_pace_max_per_km,
-      });
-
-      const repeatChildren: GarminWorkoutStep[] = [intervalStep];
-
-      // Check if next step is recovery/rest — include it in the repeat group
-      if (i + 1 < steps.length && (steps[i + 1].type === "recovery" || steps[i + 1].type === "rest")) {
-        const recStep = steps[i + 1];
-        repeatChildren.push(makeStep(2, recStep.type, {
-          endType: recStep.distance_meters ? "distance" : recStep.duration_seconds ? "time" : "lap_button",
-          endValue: recStep.distance_meters ?? recStep.duration_seconds ?? null,
-          unit: recStep.distance_meters ? "meter" : "second",
-          description: recStep.description,
-        }));
-        i++; // skip the recovery step
-      }
-
-      workoutSteps.push(makeRepeat(order++, s.repeat, repeatChildren));
-    } else {
-      // Regular step
-      workoutSteps.push(makeStep(order++, s.type, {
-        endType: s.distance_meters ? "distance" : s.duration_seconds ? "time" : "lap_button",
-        endValue: s.distance_meters ?? s.duration_seconds ?? null,
-        unit: s.distance_meters ? "meter" : "second",
-        description: s.description,
-        targetPaceMinPerKm: s.target_pace_min_per_km,
-        targetPaceMaxPerKm: s.target_pace_max_per_km,
-      }));
-    }
-    i++;
-  }
-
-  return {
-    sportType: SPORT_RUNNING,
-    workoutName: name,
-    description,
-    workoutSegments: [{
-      segmentOrder: 1,
-      sportType: SPORT_RUNNING,
-      workoutSteps,
-    }],
-  };
+/** Build a structured Garmin cycling workout with optional power, heart-rate or cadence targets. */
+export function buildCyclingWorkout(
+  name: string,
+  description: string,
+  steps: CyclingWorkoutStepInput[]
+): GarminWorkoutPayload {
+  return buildWorkout(name, description, SPORT_CYCLING, steps);
 }
 
 export async function deleteWorkout(workoutId: string): Promise<any> {

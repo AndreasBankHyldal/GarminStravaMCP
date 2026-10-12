@@ -9,13 +9,17 @@ training plans, health metrics, and watch workout synchronization.
   cadence, elevation, and training effect.
 - Analyze run pacing, interval structure, heart-rate drift, training trends,
   load/fatigue, readiness, and weekly progress.
+- Analyze bike rides (road, gravel, MTB, indoor/virtual, e-bike): speed, power,
+  normalized power, IF, TSS, W/kg, power curve, power/HR zones, cadence, climbs,
+  segments, cycling trends, a TSS-based fitness/form model, event pacing and
+  fueling, and structured bike workouts with power, HR or cadence targets.
 - Read Garmin fitness stats, VO2max, training status, heart-rate zones, HRV,
   sleep, steps, workouts, and personal records.
 - Create structured workouts and synchronize training plans to the Garmin
   calendar and compatible watches.
 - Store training plans locally in SQLite.
-- Interactive MCP Apps dashboards for run analysis, trends, heart-rate zones,
-  load/fatigue, readiness, weekly coaching, and race pacing.
+- Interactive MCP Apps dashboards for run and ride analysis, trends, heart-rate zones,
+  load/fatigue, readiness, weekly coaching, race pacing, power profiles and cycling events.
 
 ### Interactive fitness dashboards
 
@@ -32,6 +36,11 @@ can use the server's MCP Apps resource.
 | `get_readiness_score` | Readiness summary and positive/negative score contributions |
 | `weekly_coach_brief` | Selected-versus-previous-week volume and coaching notes |
 | `race_day_strategy` | Colour-coded target pace by race phase |
+| `analyze_ride_performance` | Ride speed/power/HR/elevation by segment, power curve, time in power and HR zones, cadence, climbs and laps |
+| `get_cycling_power_profile` | Best power and W/kg from 5 s to 60 min, FTP and power zones |
+| `get_cycling_trends` | Weekly riding hours, distance, TSS, elevation, power and outdoor speed |
+| `get_cycling_fitness_model` | Cycling fitness (CTL), fatigue (ATL), form (TSB) and daily TSS |
+| `cycling_event_strategy` | Target power bands by phase and hourly fueling ranges |
 
 Dashboards include metric cards, chart details, underlying data, and the original
 JSON. They support light/dark themes and narrow windows. Missing measurements are
@@ -215,6 +224,7 @@ be copied into the MCP client configuration.
 | `garmin_get_steps` | Get daily step count |
 | `garmin_get_workouts` | Get Garmin workouts |
 | `garmin_add_running_workout` | Create a structured running workout |
+| `garmin_add_cycling_workout` | Create a structured cycling workout with power (W or % FTP), HR or cadence targets |
 | `garmin_schedule_workout` | Schedule a workout |
 | `garmin_delete_workout` | Delete a workout |
 
@@ -225,8 +235,8 @@ be copied into the MCP client configuration.
 | `analyze_run_performance` | Analyze kilometre pacing, equal-distance halves, HR drift/decoupling, laps and intervals |
 | `get_training_trends` | Summarize weekly mileage, pace, and heart-rate trends |
 | `race_day_strategy` | Build a VDOT-based race pacing and execution plan |
-| `get_load_fatigue_model` | Compute CTL/ATL/TSB-style load and fatigue |
-| `get_readiness_score` | Combine recovery metrics and training load |
+| `get_load_fatigue_model` | Compute CTL/ATL/TSB-style load and fatigue (`sport`: running, cycling or both) |
+| `get_readiness_score` | Combine recovery metrics and training load (`sport`: running, cycling or both) |
 | `weekly_coach_brief` | Generate a weekly training summary |
 | `create_training_plan` | Create a local training plan with optional Garmin sync |
 | `get_training_plan` | Read a training plan and its workouts |
@@ -234,6 +244,17 @@ be copied into the MCP client configuration.
 | `sync_training_plan_to_garmin` | Synchronize a plan to Garmin calendar |
 | `adjust_training_plan` | Adapt upcoming workouts from compliance and load |
 | `check_plan_compliance` | Compare planned workouts with Garmin activities |
+
+### Cycling
+
+| Tool | Description |
+|---|---|
+| `analyze_ride_performance` | All-in-one ride analysis: speed, power (avg/NP/VI/IF/TSS/kJ/W/kg), power curve, power and HR zones, cadence, Pw:HR decoupling, segments, climbs and laps |
+| `get_cycling_power_profile` | Best efforts across recent rides, Garmin FTP versus a 20-minute estimate, W/kg and Coggan zones |
+| `get_cycling_trends` | Weekly cycling volume, TSS, elevation, power, heart rate and speed |
+| `get_cycling_fitness_model` | TSS-based CTL/ATL/TSB, ramp rate and form label |
+| `cycling_event_strategy` | Power/IF bands, climb and HR ceilings, duration estimate and fueling for TT, crit, road race, gran fondo or ultra events |
+| `garmin_add_cycling_workout` | Push a structured bike workout to Garmin Connect |
 
 ### Kilometre splits and run performance
 
@@ -301,6 +322,58 @@ If merged changes still return the old report without `kilometre_splits`,
 pulling source alone is not enough: run `npm run build` in the checkout used by
 the MCP client's configured `dist/index.js` command, then restart/reconnect that
 MCP server. Reloading the canvas extension does not restart the Garmin MCP server.
+
+### Ride analysis and cycling metrics
+
+**For a bike ride, use `analyze_ride_performance`**, never the run tools; it
+returns the complete report in one call. Find the ride first with
+`garmin_get_activities` or `garmin_search_activities` (`activity_type` "cycling")
+when no ID is given. The `ride-deep-dive` and `cycling-event-plan` prompts give
+guided workflows.
+
+| What you ask | Tool workflow |
+|---|---|
+| "Analyze my ride 123456789" or "How did my last ride go?" | `analyze_ride_performance` (after finding the ride if needed) |
+| "What is my FTP?" / "Show my power curve" / "My power zones" | `get_cycling_power_profile` |
+| "How has my cycling volume developed?" | `get_cycling_trends` |
+| "Am I fresh for Saturday's race?" | `get_cycling_fitness_model`, optionally `get_readiness_score` with `sport: "cycling"` |
+| "Plan my pacing and fueling for a 120 km sportive" | `cycling_event_strategy` |
+| "Create 3×12 min sweet spot on my Edge" | `garmin_add_cycling_workout`, then `garmin_schedule_workout` |
+
+How the numbers are calculated:
+
+- Garmin's second-by-second recording is resampled to 1 Hz. Gaps over 10 s
+  (auto-pause, stops) count as paused time and are excluded from power, zones and
+  segments; `data_quality` reports excluded time, the largest gap and per-sensor
+  coverage. Without a stream the report falls back to Garmin's summary values.
+- Normalized power is Coggan's 30-second rolling fourth-power mean; VI = NP /
+  average power; IF = NP / FTP; TSS = seconds × NP × IF / (FTP × 3600) × 100.
+  Garmin's own values are kept separately under `garmin_reported`.
+- FTP comes from `ftp_watts`, the activity, or Garmin Connect's latest cycling
+  FTP. `get_cycling_power_profile` also estimates FTP as 95 % of your best
+  20-minute power in the period. Weight comes from `weight_kg` or Garmin Connect.
+- Power zones follow Coggan's 7-zone model; heart-rate zones use your Garmin
+  cycling profile (default profile if none).
+- Climbs are sustained rises of at least 500 m, 25 m gain and 3 % average on a
+  smoothed 50 m elevation profile, with grade, VAM, power, W/kg and HR. Segment
+  elevation uses a 1.5 m hysteresis, which matches Garmin's ride totals on 1 Hz
+  altitude data.
+- Power:HR decoupling compares equal-time halves and needs 80 % power and HR
+  coverage; it is descriptive and only meaningful on steady rides.
+- Ride analysis computes TSS from the power stream when FTP is known, otherwise
+  uses Garmin's TSS, then heart-rate TSS relative to threshold HR. Weekly trends
+  and the fitness model use Garmin TSS when available, then power-based TSS from
+  FTP, then heart-rate TSS, then a conservative duration estimate; each result
+  reports how many rides used each source.
+- Without a power meter or smart trainer, power metrics are reported as
+  unavailable rather than estimated; heart rate, speed, elevation and climbs
+  still work. Indoor ride speed comes from the trainer/platform and is excluded
+  from outdoor speed trends. E-bike power is flagged.
+
+`get_load_fatigue_model` and `get_readiness_score` default to running load; pass
+`sport: "cycling"` or `"running_and_cycling"` so rides count. Activity listings
+now include a `cycling` block (speed, power, TSS, cadence) for rides and no
+longer label rides with running-pace effort levels.
 
 ### Women's training and menstrual health
 
