@@ -1,0 +1,17 @@
+node_modules
+dist
+data
+state
+.env
+.env.*
+!.env.example
+.garmin-tokens
+.garmin-mfa
+.strava-tokens.json
+.git
+.github
+.idea
+*.log
+docs
+integrations
+tests

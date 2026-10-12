@@ -99,7 +99,40 @@ const dbPath =
     ? resolveStateArtifact(defaultDbPath)
     : resolveStatePath(configuredDbPath, defaultDbPath);
 
+function envFlag(name: string): boolean {
+  return process.env[name]?.trim().toLowerCase() === "true";
+}
+
+function parsePort(value: string | undefined, fallback: number): number {
+  if (!value?.trim()) return fallback;
+  const port = Number(value);
+  // Invalid values surface as NaN and are rejected when the HTTP server starts.
+  return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : Number.NaN;
+}
+
+const transport: "stdio" | "http" =
+  process.argv.includes("--http") ||
+  process.env.MCP_TRANSPORT?.trim().toLowerCase() === "http"
+    ? "http"
+    : "stdio";
+
+const womenRequested = envFlag("I_AM_WOMAN");
+// Special-category health data must be explicitly allowed over the network.
+const womenAllowedOverTransport =
+  transport !== "http" || envFlag("MCP_HTTP_ALLOW_WOMEN_TOOLS");
+
 export const config = {
+  transport,
+  http: {
+    host: process.env.MCP_HOST?.trim() || "127.0.0.1",
+    port: parsePort(process.env.MCP_PORT ?? process.env.PORT, 3000),
+    authToken: process.env.MCP_AUTH_TOKEN?.trim() ?? "",
+    allowedHosts: (process.env.MCP_ALLOWED_HOSTS ?? "")
+      .split(",")
+      .map((host) => host.trim().toLowerCase())
+      .filter(Boolean),
+    trustProxy: envFlag("MCP_TRUST_PROXY"),
+  },
   paths: {
     projectRoot,
     stateDir,
@@ -108,14 +141,14 @@ export const config = {
     garminMfaDir: path.join(stateDir, ".garmin-mfa"),
   },
   women: {
-    toolsEnabled:
-      process.env.I_AM_WOMAN?.trim().toLowerCase() === "true",
+    requested: womenRequested,
+    toolsEnabled: womenRequested && womenAllowedOverTransport,
   },
   garmin: {
     username: process.env.GARMIN_USERNAME ?? "",
     password: process.env.GARMIN_PASSWORD ?? "",
     womenHealthEnabled:
-      process.env.GARMIN_WOMENS_HEALTH_ENABLED?.trim().toLowerCase() === "true",
+      envFlag("GARMIN_WOMENS_HEALTH_ENABLED") && womenAllowedOverTransport,
   },
   dbPath,
 };

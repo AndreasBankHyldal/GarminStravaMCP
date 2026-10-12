@@ -22,6 +22,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Garmin rate-limits fresh logins from datacenter IPs, so hosted servers reuse tokens made elsewhere. */
+function withHostedLoginHint(message: string): string {
+  if (config.transport !== "http") return message;
+  return (
+    `${message.replace(/\.?\s*$/, ".")} Hosted servers often get HTTP 429 from Garmin on a fresh login. Run \`npm run garmin-auth\` ` +
+    `on a home machine, copy oauth1_token.json and oauth2_token.json into ${TOKEN_DIR}, ` +
+    `then restart the server. Don't retry the login repeatedly from the server.`
+  );
+}
+
 function isAuthError(err: any): boolean {
   const status = err?.response?.status ?? err?.status;
   const msg = String(err?.message ?? "");
@@ -148,13 +158,13 @@ export async function getGarminClient(): Promise<any> {
       await performLogin(gc);
     } catch (err: any) {
       if (isMfaRequiredError(err)) {
-        throw new Error(
+        throw new Error(withHostedLoginHint(
           "Garmin requires MFA (a code was sent via SMS/email/app), but the MCP server " +
-          "can't prompt for it over stdio. Run `npm run garmin-auth` once in a terminal to " +
+          "can't prompt for it. Run `npm run garmin-auth` once in a terminal to " +
           "enter the code and cache your session tokens, then restart the server."
-        );
+        ));
       }
-      throw new Error(`Garmin login failed: ${err.message}`);
+      throw new Error(withHostedLoginHint(`Garmin login failed: ${err.message}`));
     }
   }
 
@@ -184,7 +194,7 @@ async function withRetry<T>(fn: (gc: any) => Promise<T>): Promise<T> {
             continue;
           } catch (retryErr: any) {
             client = null;
-            throw new Error(`Garmin re-auth failed: ${retryErr.message}`);
+            throw new Error(withHostedLoginHint(`Garmin re-auth failed: ${retryErr.message}`));
           }
         }
 

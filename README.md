@@ -195,6 +195,23 @@ Point the MCP client at the built entry point:
 Credentials are read from the `.env` location described above and should not
 be copied into the MCP client configuration.
 
+### Hosted HTTP mode
+
+stdio is the default. To serve MCP over the network instead, build with
+`npm run build:server` and start with `npm run start:http`, or set
+`MCP_TRANSPORT=http`. HTTP mode serves Streamable HTTP on `/mcp`, requires
+`Authorization: Bearer <MCP_AUTH_TOKEN>` (at least 32 characters), and adds an
+unauthenticated `/healthz`. It binds `127.0.0.1:3000` unless `MCP_HOST` or
+`MCP_PORT` say otherwise. Women's-health tools stay disabled over HTTP unless
+`MCP_HTTP_ALLOW_WOMEN_TOOLS=true`.
+
+[docs/hosting-oracle.md](docs/hosting-oracle.md) describes the full deployment:
+an Always Free Oracle VM, Docker Compose with Caddy and a free DuckDNS hostname
+for HTTPS, token bootstrap (Garmin rate-limits fresh logins from datacenter
+IPs, so log in at home and copy the tokens), backups, auto-deploy, and client
+configuration. `npm run garmin-auth:dist` runs the login flow from a production
+build without dev dependencies.
+
 ## Available tools
 
 ### Garmin Connect
@@ -340,11 +357,12 @@ npm test
 npm start
 ```
 
-The server uses stdio transport. Runtime messages are sent to stderr so stdout
-remains valid MCP protocol output.
+The server uses stdio transport by default (`npm run start:http` for HTTP).
+Runtime messages are sent to stderr so stdout remains valid MCP protocol output.
 
 `npm run build` compiles the server, bundles both dashboard entry points, and
 packages the Copilot extension into `dist/copilot/garmin-fitness/`.
+`npm run build:server` skips the Copilot extension; the Docker image uses it.
 `npm run dev` rebuilds UI assets before starting the TypeScript server; restart
 it after UI edits. No manually managed web server is needed.
 

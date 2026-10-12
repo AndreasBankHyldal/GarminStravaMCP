@@ -1,0 +1,7 @@
+# Automatic HTTPS (Let's Encrypt) for the DuckDNS hostname set in MCP_PUBLIC_HOST.
+# Needs ports 80 and 443 open in the OCI security list and the VM firewall.
+{$MCP_PUBLIC_HOST} {
+	encode gzip
+	header -Server
+	reverse_proxy app:3000
+}
