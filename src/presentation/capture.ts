@@ -2,6 +2,8 @@ import { z } from "zod";
 import { reportSchema, REPORT_META_KEY } from "./model.js";
 import { kilometreSplitsSchema } from "../garmin/splits.js";
 import { activityReport, loadReport, raceReport, readinessReport, runReport, trendsReport, weeklyReport, zonesReport } from "./reports.js";
+import { cyclingEventReport, cyclingFitnessReport, cyclingTrendsReport, powerProfileReport, rideReport } from "./cycling.js";
+import { cyclingEventSchema, cyclingFitnessSchema, cyclingTrendsSchema, powerProfileSchema, rideAnalysisSchema } from "../cycling/schema.js";
 
 const nullableNumber = z.number().finite().nullable();
 const date = z.object({ human: z.string() });
@@ -64,7 +66,7 @@ const loadSnapshot = z.object({
   ctl: z.number(), atl: z.number(), tsb: z.number(), acute_chronic_ratio: z.number(), fatigue_risk: z.string(),
 });
 const load = z.object({
-  days: z.number(), runs_analyzed: z.number(),
+  days: z.number(), runs_analyzed: z.number(), sport: z.string().optional(),
   model: z.object({
     current: loadSnapshot,
     daily_load: z.array(z.object({ date: z.string(), load: z.number(), ctl: z.number(), atl: z.number(), tsb: z.number() })),
@@ -100,6 +102,11 @@ const adapters = {
   get_readiness_score: (data: unknown) => readinessReport(readiness.parse(data)),
   weekly_coach_brief: (data: unknown) => weeklyReport(weekly.parse(data)),
   race_day_strategy: (data: unknown) => raceReport(race.parse(data)),
+  analyze_ride_performance: (data: unknown) => rideReport(rideAnalysisSchema.parse(data)),
+  get_cycling_power_profile: (data: unknown) => powerProfileReport(powerProfileSchema.parse(data)),
+  get_cycling_trends: (data: unknown) => cyclingTrendsReport(cyclingTrendsSchema.parse(data)),
+  get_cycling_fitness_model: (data: unknown) => cyclingFitnessReport(cyclingFitnessSchema.parse(data)),
+  cycling_event_strategy: (data: unknown) => cyclingEventReport(cyclingEventSchema.parse(data)),
 };
 export type ReportTool = keyof typeof adapters;
 export const reportToolNames = Object.keys(adapters);
