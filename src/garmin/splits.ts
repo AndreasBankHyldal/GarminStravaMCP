@@ -52,7 +52,7 @@ const pace = (seconds: number | null, meters: number) =>
   seconds !== null && seconds > 0 ? speedToPacePerKm(meters / seconds) : null;
 
 // Garmin values are already in unit.key; factor describes encoding, not a divisor.
-function metricReader(chart: GarminActivityChart, keys: string[], units: Record<string, number>, scale = 1) {
+export function metricReader(chart: GarminActivityChart, keys: string[], units: Record<string, number>, scale = 1) {
   const descriptor = keys.map(key => chart.metricDescriptors?.find(item => item.key === key)).find(Boolean);
   if (!descriptor) return null;
   const multiplier = units[descriptor.unit?.key.toLowerCase() ?? ""];

@@ -14,6 +14,7 @@ import {
   LapLike,
   speedToPacePerKm,
 } from "../utils.js";
+import { isCyclingType } from "../cycling/activity-type.js";
 
 const HEART_RATE_ZONE_LABELS = [
   "Recovery",
@@ -86,9 +87,31 @@ export function getGarminMovingSpeed(activity: {
   return activity.averageSpeed ?? 0;
 }
 
+function positiveField(activity: GarminActivity, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = Number(activity[key]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return null;
+}
+
+/** Ride-specific summary fields; running pace/effort labels do not apply to bikes. */
+function cyclingFields(activity: GarminActivity, movingSpeed: number) {
+  return {
+    speed_kmh: movingSpeed > 0 ? +(movingSpeed * 3.6).toFixed(1) : null,
+    avg_power_w: positiveField(activity, ["avgPower", "averagePower"]),
+    normalized_power_w: positiveField(activity, ["normPower", "normalizedPower"]),
+    max_power_w: positiveField(activity, ["maxPower"]),
+    tss: positiveField(activity, ["trainingStressScore"]),
+    intensity_factor: positiveField(activity, ["intensityFactor"]),
+    cadence_rpm: positiveField(activity, ["averageBikingCadenceInRevPerMinute", "averageBikeCadence"]),
+  };
+}
+
 export function formatGarminActivity(activity: GarminActivity) {
   const movingSpeed = getGarminMovingSpeed(activity);
   const paceSecPerKm = movingSpeed > 0 ? 1000 / movingSpeed : 0;
+  const isRide = isCyclingType(activity.activityType?.typeKey);
   return {
     id: activity.activityId,
     source: "garmin",
@@ -99,7 +122,7 @@ export function formatGarminActivity(activity: GarminActivity) {
     duration: formatDuration(activity.duration ?? 0),
     moving_duration: formatDuration(activity.movingDuration ?? 0),
     pace_per_km: speedToPacePerKm(movingSpeed),
-    effort_level: paceSecPerKm > 0 ? classifyEffort(paceSecPerKm) : null,
+    effort_level: paceSecPerKm > 0 && !isRide ? classifyEffort(paceSecPerKm) : null,
     elevation_gain_m: activity.elevationGain ?? 0,
     avg_heartrate: activity.averageHR ?? null,
     max_heartrate: activity.maxHR ?? null,
@@ -107,6 +130,7 @@ export function formatGarminActivity(activity: GarminActivity) {
     calories: activity.calories ?? null,
     cadence_spm: activity.averageRunningCadenceInStepsPerMinute ?? null,
     vo2max: activity.vO2MaxValue ?? null,
+    ...(isRide ? { cycling: cyclingFields(activity, movingSpeed) } : {}),
   };
 }
 
