@@ -342,7 +342,7 @@ test("splits tool works over MCP, validates IDs, captures a dashboard and propag
 
 test("AI routing and documentation request the full run-performance report in one call", async () => {
   const [instructions, extension, readme] = await Promise.all([
-    readFile(new URL("../src/index.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src/server.ts", import.meta.url), "utf8"),
     readFile(new URL("../integrations/copilot/extension.mjs", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
   ]);

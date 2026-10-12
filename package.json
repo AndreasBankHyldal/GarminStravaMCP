@@ -5,13 +5,16 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc && npm run build:ui && npm run build:copilot",
+    "build:server": "tsc && npm run build:ui",
     "build:ui": "node scripts/build-dashboard.mjs",
     "build:copilot": "node scripts/build-copilot.mjs",
     "install:copilot": "npm run build:ui && npm run build:copilot && node scripts/install-copilot.mjs",
     "test": "tsx --test tests/**/*.test.ts",
     "start": "node dist/index.js",
+    "start:http": "node dist/index.js --http",
     "dev": "npm run build:ui && tsx src/index.ts",
-    "garmin-auth": "tsx src/garmin/auth-flow.ts"
+    "garmin-auth": "tsx src/garmin/auth-flow.ts",
+    "garmin-auth:dist": "node dist/garmin/auth-flow.js"
   },
   "keywords": [],
   "author": "",

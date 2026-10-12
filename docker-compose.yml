@@ -1,0 +1,42 @@
+# Hosted deployment: MCP server behind Caddy (automatic HTTPS) on a DuckDNS hostname.
+# See docs/hosting-oracle.md. Secrets live in ./.env next to this file (chmod 600).
+services:
+  app:
+    build: .
+    image: garmin-mcp:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "3000"
+      GARMIN_STATE_DIR: /data
+      MCP_ALLOWED_HOSTS: ${MCP_PUBLIC_HOST:?Set MCP_PUBLIC_HOST in .env}
+      # Caddy is the only client; use its X-Forwarded-For for failed-auth rate limiting.
+      MCP_TRUST_PROXY: "true"
+    volumes:
+      # Host directory holding .garmin-tokens/ and data/training.db. The container runs
+      # as uid 1000, which matches the default `ubuntu` user on Oracle's Ubuntu images.
+      - ${GARMIN_DATA_DIR:-./state}:/data
+    # Loopback only, for debugging on the VM. Public traffic goes through Caddy.
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      MCP_PUBLIC_HOST: ${MCP_PUBLIC_HOST:?Set MCP_PUBLIC_HOST in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

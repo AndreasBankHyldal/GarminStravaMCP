@@ -9,3 +9,6 @@ data/*.db-shm
 .garmin-tokens/
 .garmin-mfa/
 *.log
+
+# Hosted Docker state (Garmin tokens, SQLite database)
+state/
