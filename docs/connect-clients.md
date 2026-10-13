@@ -11,9 +11,9 @@ You need:
   personal token the admin created for you
 - for Claude Desktop only: [Node.js](https://nodejs.org) 18 or newer, which provides `npx`
 
-The token decides **whose** Garmin data you see. If you're not the owner, first upload your own
-Garmin session as described in [multi-user.md](multi-user.md), then continue here with your
-personal token.
+The token decides **whose** Garmin data you see. If you're not the owner, follow the beginner-friendly
+[getting-started.md](getting-started.md) instead. It covers uploading your Garmin session and the
+most common apps.
 
 Keep the MCP server name **`garmin`** in every client. The Copilot fitness canvas and the routing
 instructions recognise Garmin tools by that prefix.

@@ -37,6 +37,26 @@ function prompt(question: string): Promise<string> {
   });
 }
 
+/** Like prompt(), but typed characters aren't shown (passwords, tokens). */
+function promptHidden(question: string): Promise<string> {
+  if (!process.stdin.isTTY) return prompt(question);
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  const rlInternal = rl as unknown as { _writeToOutput: (text: string) => void };
+  const write = rlInternal._writeToOutput.bind(rl);
+  let muted = false;
+  rlInternal._writeToOutput = (text: string) => {
+    if (!muted) write(text);
+  };
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      process.stdout.write("\n");
+      resolve(answer.trim());
+    });
+    muted = true;
+  });
+}
+
 function parseArgs(argv: string[]): { uploadUrl: string | null; skipLogin: boolean } {
   const index = argv.indexOf("--upload");
   const uploadUrl = index === -1 ? null : argv[index + 1];
@@ -55,7 +75,9 @@ function parseArgs(argv: string[]): { uploadUrl: string | null; skipLogin: boole
 async function uploadTokens(serverUrl: string): Promise<void> {
   const target = tokenUploadUrl(serverUrl);
   const bundle = readTokenBundle(TOKEN_DIR);
-  const token = process.env.GARMIN_MCP_TOKEN?.trim() || (await prompt("Your server access token: "));
+  const token =
+    process.env.GARMIN_MCP_TOKEN?.trim() ||
+    (await promptHidden("Paste your personal access token (hidden) and press Enter: "));
   if (!token) throw new Error("No server access token given (set GARMIN_MCP_TOKEN)");
 
   const response = await fetch(target, {
@@ -83,8 +105,11 @@ async function main() {
     }
   }
 
-  if (!config.garmin.username || !config.garmin.password) {
-    console.error("Error: Set GARMIN_USERNAME and GARMIN_PASSWORD in your .env file");
+  // Credentials come from .env when present; otherwise ask, so no file has to be edited.
+  const username = config.garmin.username || (await prompt("Garmin Connect email: "));
+  const password = config.garmin.password || (await promptHidden("Garmin Connect password (hidden): "));
+  if (!username || !password) {
+    console.error("Error: a Garmin email and password are required");
     process.exit(1);
   }
 
@@ -92,12 +117,12 @@ async function main() {
   fs.mkdirSync(MFA_DIR, { recursive: true });
 
   console.log("\n⌚ Garmin Connect Setup (with MFA support)\n");
-  console.log(`Logging in as ${config.garmin.username}...`);
+  console.log(`Logging in as ${username}...`);
   console.log("If your account has MFA enabled, Garmin will send you a code (SMS/email/app).\n");
 
   const gc = new GarminConnect({
-    username: config.garmin.username,
-    password: config.garmin.password,
+    username,
+    password,
     mfa: { type: "file", dir: MFA_DIR },
   });
 
@@ -107,7 +132,7 @@ async function main() {
   // Kick off login. If MFA is required, this blocks until the code is submitted
   // (or the library's 5-minute timeout elapses).
   const loginPromise = gc
-    .login(config.garmin.username, config.garmin.password, sessionId)
+    .login(username, password, sessionId)
     .then(() => {
       loginSettled = true;
     })
@@ -120,7 +145,9 @@ async function main() {
   await new Promise((r) => setTimeout(r, 2500));
 
   if (!loginSettled) {
-    const code = await prompt("Enter the MFA code Garmin sent you: ");
+    const code = await prompt(
+      "If Garmin sent you a verification code, type it here; otherwise just press Enter: "
+    );
     if (code) {
       const submitted = await MFAManager.getInstance().submitMFACode(sessionId, code);
       if (!submitted) {

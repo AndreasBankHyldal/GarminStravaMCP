@@ -44,11 +44,17 @@ docker compose exec app node dist/users/cli.js remove alice   # revoke access, k
 docker compose exec app node dist/users/cli.js remove alice --purge   # revoke and delete their data
 ```
 
-User ids are 1–32 lowercase letters, digits, `-` or `_`, and `owner` is reserved. Send the token
-privately, for example as a password-manager share, never in a public channel. Only add people who
+User ids are 1–32 lowercase letters, digits, `-` or `_`, and `owner` is reserved. `add` and
+`rotate` also print a welcome message with the server address and a link to the setup guide. Send
+the token privately and separately, for example as a password-manager share, never in a public
+channel. Only add people who
 have agreed to their health and training data being stored on your server.
 
 ## New user: getting started
+
+> 👉 New users should follow the step-by-step **[getting-started.md](getting-started.md)**. `users add`
+> prints a ready-to-forward message linking to it. The rest of this section is the short technical
+> version.
 
 You need the server URL (for example `https://your-name.duckdns.org`) and your personal token from
 the admin.
