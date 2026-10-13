@@ -112,6 +112,13 @@ MCP_AUTH_TOKEN=<output of: openssl rand -hex 32>
 MCP_PUBLIC_HOST=your-name.duckdns.org
 ```
 
+The container must run as the user that owns `./state`. On Oracle's Ubuntu image `ubuntu` is
+uid/gid **1001**, not 1000, so append them to `.env`:
+
+```bash
+echo "APP_UID=$(id -u)" >> .env && echo "APP_GID=$(id -g)" >> .env
+```
+
 `docker-compose.yml` sets `MCP_TRANSPORT=http`, `MCP_HOST=0.0.0.0` inside the container,
 `GARMIN_STATE_DIR=/data`, `MCP_ALLOWED_HOSTS=$MCP_PUBLIC_HOST` and `MCP_TRUST_PROXY=true`.
 Start everything:
@@ -127,8 +134,9 @@ docker compose logs -f app
 Notes:
 
 - `./state` on the host is mounted at `/data`. Tokens live in `state/.garmin-tokens/` and the
-  database in `state/data/training.db`. The container runs as uid 1000, the same uid as the
-  `ubuntu` user, so files copied with `scp` are readable. Set `GARMIN_DATA_DIR` to use another
+  database in `state/data/training.db`. The container runs as `APP_UID:APP_GID` (default
+  1000:1000), so files copied with `scp` as that user stay readable. A mismatch shows up as
+  "Permission denied" on `/data` and a Garmin login attempt (429) because no tokens are found. Set `GARMIN_DATA_DIR` to use another
   host directory.
 - The app port is published on the VM's loopback only. Public traffic goes through Caddy.
 - To bring existing training plans along, stop the app (`docker compose stop app`), copy your
