@@ -164,7 +164,8 @@ again.
 
 `.github/workflows/ci-deploy.yml` builds and tests every push and pull request. On pushes to `main`
 it then SSHes into the VM and runs `git pull && docker compose up -d --build`. The deploy step is
-skipped until the secrets exist.
+skipped until the secrets exist. To redeploy without pushing, run
+`gh workflow run ci-deploy.yml --ref main` (or *Run workflow* in the Actions tab).
 
 1. Create a dedicated key pair on your machine. Don't reuse your personal key:
    `ssh-keygen -t ed25519 -f ~/.ssh/garmin_deploy -C github-deploy -N ""`
