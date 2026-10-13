@@ -5,6 +5,9 @@ services:
     build: .
     image: garmin-mcp:latest
     restart: unless-stopped
+    # Run as the host user that owns ./state, so tokens copied in with scp stay readable.
+    # Oracle's Ubuntu image gives `ubuntu` uid/gid 1001: set APP_UID/APP_GID from `id -u`/`id -g`.
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
     env_file: .env
     environment:
       MCP_TRANSPORT: http
@@ -15,8 +18,7 @@ services:
       # Caddy is the only client; use its X-Forwarded-For for failed-auth rate limiting.
       MCP_TRUST_PROXY: "true"
     volumes:
-      # Host directory holding .garmin-tokens/ and data/training.db. The container runs
-      # as uid 1000, which matches the default `ubuntu` user on Oracle's Ubuntu images.
+      # Host directory holding .garmin-tokens/ and data/training.db, owned by APP_UID.
       - ${GARMIN_DATA_DIR:-./state}:/data
     # Loopback only, for debugging on the VM. Public traffic goes through Caddy.
     ports:
