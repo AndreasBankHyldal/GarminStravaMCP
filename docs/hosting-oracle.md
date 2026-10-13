@@ -152,7 +152,12 @@ example from a daily cron job on the VM (`sudo apt install sqlite3`):
 
 ```bash
 mkdir -p ~/backups
-sqlite3 ~/GarminStravaMCP/state/data/training.db ".backup '$HOME/backups/training-$(date +%F).db'"
+cd ~/GarminStravaMCP/state
+sqlite3 data/training.db ".backup '$HOME/backups/training-owner-$(date +%F).db'"
+# Other users (docs/multi-user.md) each have their own database:
+for db in users/*/data/training.db; do
+  [ -f "$db" ] && sqlite3 "$db" ".backup '$HOME/backups/training-$(basename "$(dirname "$(dirname "$db")")")-$(date +%F).db'"
+done
 find ~/backups -name 'training-*.db' -mtime +14 -delete
 ```
 
@@ -199,6 +204,8 @@ The endpoint is `https://your-name.duckdns.org/mcp`, with the header
 `mcp-remote`), the GitHub Copilot desktop app and CLI, VS Code and Claude Code, plus
 troubleshooting. Client machines need no checkout, Garmin credentials or tokens.
 
+To let other people use the server with **their own** Garmin data, see [multi-user.md](multi-user.md).
+
 ### Smoke tests
 
 - `curl -s https://your-name.duckdns.org/healthz` returns `{"status":"ok"}`.
@@ -211,7 +218,12 @@ troubleshooting. Client machines need no checkout, Garmin credentials or tokens.
 
 - Bearer token, at least 32 characters, compared in constant time. The server refuses to start in
   HTTP mode without one. After 10 failed attempts in 15 minutes a client gets `429`.
-- `/healthz` needs no token and returns no data. Everything else except `/mcp` is a 404.
+- Additional users ([multi-user.md](multi-user.md)) have their own tokens, stored only as SHA-256
+  hashes in `state/users.json`. Each request runs with that user's Garmin session and database.
+- `PUT /garmin-tokens` lets an authenticated user replace **their own** Garmin session tokens.
+  The server never stores Garmin passwords for anyone except the owner's optional `.env` ones.
+- `/healthz` needs no token and returns no data. Everything else except `/mcp` and
+  `/garmin-tokens` is a 404.
 - Host and Origin headers must be localhost or `MCP_ALLOWED_HOSTS`, as DNS-rebinding protection.
 - The server is stateless: each POST gets a fresh MCP server instance. GET and DELETE on `/mcp`
   return 405.

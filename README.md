@@ -219,7 +219,10 @@ an Always Free Oracle VM, Docker Compose with Caddy and a free DuckDNS hostname
 for HTTPS, token bootstrap (Garmin rate-limits fresh logins from datacenter
 IPs, so log in at home and copy the tokens), backups, auto-deploy, and client
 configuration. [docs/connect-clients.md](docs/connect-clients.md) explains how to use
-the hosted server from any computer. `npm run garmin-auth:dist` runs the login flow from a production
+the hosted server from any computer, and [docs/multi-user.md](docs/multi-user.md)
+shares one server with other people, each with their own token, Garmin session and
+database (`docker compose exec app node dist/users/cli.js add <id>` on the server). `npm run garmin-auth -- --upload <url>`
+uploads a Garmin session to a hosted server. `npm run garmin-auth:dist` runs the login flow from a production
 build without dev dependencies.
 
 ## Available tools

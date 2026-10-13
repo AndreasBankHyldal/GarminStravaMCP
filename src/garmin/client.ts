@@ -1,34 +1,60 @@
 import GarminConnectModule from "@gooin/garmin-connect";
 import { config } from "../config.js";
+import { currentUser, type UserContext } from "../users/context.js";
 import fs from "node:fs";
 
 const GarminConnect = (GarminConnectModule as any).GarminConnect ?? GarminConnectModule;
 
-const TOKEN_DIR = config.paths.garminTokenDir;
-
-let client: any = null;
-let lastLoginAttempt = 0;
 const LOGIN_COOLDOWN_MS = 60_000; // Wait at least 60s between login attempts
-let lastHealthCheckAt = 0;
-let requestQueue: Promise<void> = Promise.resolve();
-let lastRequestAt = 0;
-
 const HEALTH_CHECK_INTERVAL_MS = 10 * 60_000;
 const REQUEST_GAP_MS = 450;
 const RATE_LIMIT_BASE_DELAY_MS = 2_000;
 const MAX_RATE_LIMIT_RETRIES = 3;
+// Token-only users have no password; the library still requires non-empty credentials.
+const TOKEN_ONLY_PLACEHOLDER = "token-only";
+
+/** Garmin session state per user. Requests share one queue because they share one IP. */
+interface ClientState {
+  client: any;
+  lastLoginAttempt: number;
+  lastHealthCheckAt: number;
+}
+
+const clientStates = new Map<string, ClientState>();
+let requestQueue: Promise<void> = Promise.resolve();
+let lastRequestAt = 0;
+
+function stateFor(user: UserContext): ClientState {
+  let state = clientStates.get(user.id);
+  if (!state) {
+    state = { client: null, lastLoginAttempt: 0, lastHealthCheckAt: 0 };
+    clientStates.set(user.id, state);
+  }
+  return state;
+}
+
+function hasCredentials(user: UserContext): boolean {
+  return Boolean(user.garminUsername && user.garminPassword);
+}
+
+/** Drop a user's cached session, e.g. after new tokens were uploaded. */
+export function resetGarminClient(userId: string): void {
+  clientStates.delete(userId);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Garmin rate-limits fresh logins from datacenter IPs, so hosted servers reuse tokens made elsewhere. */
-function withHostedLoginHint(message: string): string {
+function withHostedLoginHint(message: string, user: UserContext): string {
   if (config.transport !== "http") return message;
   return (
-    `${message.replace(/\.?\s*$/, ".")} Hosted servers often get HTTP 429 from Garmin on a fresh login. Run \`npm run garmin-auth\` ` +
-    `on a home machine, copy oauth1_token.json and oauth2_token.json into ${TOKEN_DIR}, ` +
-    `then restart the server. Don't retry the login repeatedly from the server.`
+    `${message.replace(/\.?\s*$/, ".")} Hosted servers often get HTTP 429 from Garmin on a fresh login. ` +
+    `Log in on your own computer and upload the session tokens with ` +
+    `\`npm run garmin-auth -- --upload <server-url>\` (see docs/connect-clients.md)` +
+    (user.id === "owner" ? `, or copy oauth1_token.json and oauth2_token.json into ${user.garminTokenDir}` : "") +
+    `. Don't retry the login repeatedly from the server.`
   );
 }
 
@@ -82,101 +108,113 @@ function enqueueRequest<T>(task: () => Promise<T>): Promise<T> {
   return next;
 }
 
-async function tryLoadTokens(gc: any): Promise<boolean> {
-  if (!fs.existsSync(TOKEN_DIR)) return false;
+async function tryLoadTokens(gc: any, user: UserContext): Promise<boolean> {
+  if (!fs.existsSync(user.garminTokenDir)) return false;
   try {
-    await gc.loadTokenByFile(TOKEN_DIR);
+    await gc.loadTokenByFile(user.garminTokenDir);
     return true;
   } catch {
     return false;
   }
 }
 
-async function saveTokens(gc: any): Promise<void> {
+async function saveTokens(gc: any, user: UserContext): Promise<void> {
   try {
-    if (!fs.existsSync(TOKEN_DIR)) {
-      fs.mkdirSync(TOKEN_DIR, { recursive: true });
+    if (!fs.existsSync(user.garminTokenDir)) {
+      fs.mkdirSync(user.garminTokenDir, { recursive: true, mode: 0o700 });
     }
-    await gc.exportTokenToFile(TOKEN_DIR);
+    await gc.exportTokenToFile(user.garminTokenDir);
   } catch {
     // Non-critical — we'll just re-login next time
   }
 }
 
-async function performLogin(gc: any): Promise<void> {
+async function performLogin(gc: any, user: UserContext): Promise<void> {
+  if (!hasCredentials(user)) {
+    throw new Error(
+      `No valid Garmin session for user "${user.id}", and this server never stores their Garmin password`
+    );
+  }
+  const state = stateFor(user);
   const now = Date.now();
-  if (now - lastLoginAttempt < LOGIN_COOLDOWN_MS) {
-    const waitSec = Math.ceil((LOGIN_COOLDOWN_MS - (now - lastLoginAttempt)) / 1000);
+  if (now - state.lastLoginAttempt < LOGIN_COOLDOWN_MS) {
+    const waitSec = Math.ceil((LOGIN_COOLDOWN_MS - (now - state.lastLoginAttempt)) / 1000);
     throw new Error(
       `Garmin login rate-limited. Wait ${waitSec}s before retrying. ` +
       `Garmin blocks repeated login attempts — this is a cooldown to protect your account.`
     );
   }
-  lastLoginAttempt = now;
+  state.lastLoginAttempt = now;
   await gc.login();
-  await saveTokens(gc);
+  await saveTokens(gc, user);
 }
 
-export async function getGarminClient(): Promise<any> {
-  if (client) {
+export async function getGarminClient(user: UserContext = currentUser()): Promise<any> {
+  const state = stateFor(user);
+  if (state.client) {
     // Periodically verify token health to avoid using stale sessions indefinitely.
-    if (Date.now() - lastHealthCheckAt > HEALTH_CHECK_INTERVAL_MS) {
+    if (Date.now() - state.lastHealthCheckAt > HEALTH_CHECK_INTERVAL_MS) {
       try {
-        await client.getUserProfile();
-        lastHealthCheckAt = Date.now();
+        await state.client.getUserProfile();
+        state.lastHealthCheckAt = Date.now();
       } catch (err: any) {
         if (isAuthError(err)) {
-          client = null;
+          state.client = null;
         } else {
           throw err;
         }
       }
     } else {
-      return client;
+      return state.client;
     }
-    if (client) return client;
+    if (state.client) return state.client;
   }
 
-  if (!config.garmin.username || !config.garmin.password) {
+  const tokenOnly = !hasCredentials(user);
+  if (tokenOnly && user.id === "owner" && config.transport !== "http") {
     throw new Error(
       "Garmin credentials not configured. Set GARMIN_USERNAME and GARMIN_PASSWORD in .env"
     );
   }
 
   const gc = new GarminConnect({
-    username: config.garmin.username,
-    password: config.garmin.password,
-    mfa: { type: "file", dir: config.paths.garminMfaDir },
+    username: user.garminUsername || TOKEN_ONLY_PLACEHOLDER,
+    password: user.garminPassword || TOKEN_ONLY_PLACEHOLDER,
+    mfa: { type: "file", dir: user.garminMfaDir },
   });
 
   // Try cached tokens first to avoid unnecessary logins
-  const tokensLoaded = await tryLoadTokens(gc);
+  const tokensLoaded = await tryLoadTokens(gc, user);
 
   if (!tokensLoaded) {
     // No cached tokens — must do a fresh login
     try {
-      await performLogin(gc);
+      await performLogin(gc, user);
     } catch (err: any) {
       if (isMfaRequiredError(err)) {
         throw new Error(withHostedLoginHint(
           "Garmin requires MFA (a code was sent via SMS/email/app), but the MCP server " +
           "can't prompt for it. Run `npm run garmin-auth` once in a terminal to " +
-          "enter the code and cache your session tokens, then restart the server."
+          "enter the code and cache your session tokens, then restart the server.",
+          user
         ));
       }
-      throw new Error(withHostedLoginHint(`Garmin login failed: ${err.message}`));
+      throw new Error(withHostedLoginHint(`Garmin login failed: ${err.message}`, user));
     }
   }
 
-  client = gc;
-  lastHealthCheckAt = Date.now();
-  return client;
+  state.client = gc;
+  state.lastHealthCheckAt = Date.now();
+  return gc;
 }
 
 /** Wrap a Garmin API call with automatic re-auth on 403 */
 async function withRetry<T>(fn: (gc: any) => Promise<T>): Promise<T> {
+  // Resolve the caller's user now; the queued task may run after other requests.
+  const user = currentUser();
   return enqueueRequest(async () => {
-    let gc = await getGarminClient();
+    const state = stateFor(user);
+    let gc = await getGarminClient(user);
 
     for (let attempt = 0; attempt <= MAX_RATE_LIMIT_RETRIES; attempt++) {
       try {
@@ -184,17 +222,17 @@ async function withRetry<T>(fn: (gc: any) => Promise<T>): Promise<T> {
       } catch (err: any) {
         if (isAuthError(err)) {
           // Session likely expired — clear and re-auth once.
-          console.error("Garmin session expired, re-authenticating...");
-          client = null;
+          console.error(`Garmin session expired for user "${user.id}", re-authenticating...`);
+          state.client = null;
           try {
-            gc = await getGarminClient();
-            await performLogin(gc);
-            client = gc;
-            lastHealthCheckAt = Date.now();
+            gc = await getGarminClient(user);
+            await performLogin(gc, user);
+            state.client = gc;
+            state.lastHealthCheckAt = Date.now();
             continue;
           } catch (retryErr: any) {
-            client = null;
-            throw new Error(withHostedLoginHint(`Garmin re-auth failed: ${retryErr.message}`));
+            state.client = null;
+            throw new Error(withHostedLoginHint(`Garmin re-auth failed: ${retryErr.message}`, user));
           }
         }
 

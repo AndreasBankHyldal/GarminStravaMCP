@@ -7,8 +7,13 @@ Garmin tokens or `git pull`. The server updates itself on every push to `main`.
 You need:
 
 - the endpoint, `https://your-name.duckdns.org/mcp`
-- the access token, the `MCP_AUTH_TOKEN` value from `~/GarminStravaMCP/.env` on the VM
+- your access token: the owner's `MCP_AUTH_TOKEN` from `~/GarminStravaMCP/.env` on the VM, or the
+  personal token the admin created for you
 - for Claude Desktop only: [Node.js](https://nodejs.org) 18 or newer, which provides `npx`
+
+The token decides **whose** Garmin data you see. If you're not the owner, first upload your own
+Garmin session as described in [multi-user.md](multi-user.md), then continue here with your
+personal token.
 
 Keep the MCP server name **`garmin`** in every client. The Copilot fitness canvas and the routing
 instructions recognise Garmin tools by that prefix.
@@ -16,7 +21,8 @@ instructions recognise Garmin tools by that prefix.
 ## 1. Get the token once and store it safely
 
 Save the token in a password manager so every computer can reach it. Never commit it, put it in an
-issue, or paste it into a chat. Two ways to read it:
+issue, or paste it into a chat. Personal tokens are shown once by the admin's `users add`; if you
+lose yours, ask for a new one (`users rotate`). The owner can read theirs in two ways:
 
 ```bash
 # From the VM (needs your Oracle SSH key on this computer):
