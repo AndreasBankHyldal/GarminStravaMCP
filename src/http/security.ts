@@ -18,12 +18,18 @@ function digest(value: string): Buffer {
   return createHash("sha256").update(value, "utf8").digest();
 }
 
+/** The token from an `Authorization: Bearer <token>` header, or null. */
+export function extractBearerToken(header: string | undefined): string | null {
+  if (!header) return null;
+  const match = /^Bearer[ \t]+(\S+)[ \t]*$/i.exec(header);
+  return match ? match[1] : null;
+}
+
 /** Constant-time comparison of an `Authorization: Bearer <token>` header. */
 export function bearerTokenMatches(header: string | undefined, expected: string): boolean {
-  if (!header || !expected) return false;
-  const match = /^Bearer[ \t]+(\S+)[ \t]*$/i.exec(header);
-  if (!match) return false;
-  return timingSafeEqual(digest(match[1]), digest(expected));
+  const token = extractBearerToken(header);
+  if (!token || !expected) return false;
+  return timingSafeEqual(digest(token), digest(expected));
 }
 
 /** Hostname of a Host header without the port, lower-cased. */

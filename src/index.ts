@@ -2,6 +2,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { config } from "./config.js";
 import { createServer } from "./server.js";
 import { startHttpServer } from "./http/server.js";
+import { assertValidAuthToken } from "./http/security.js";
+import { ownerContext } from "./users/context.js";
+import { createUserRegistry, readUsers } from "./users/registry.js";
+import { closeDb } from "./db/database.js";
+import { resetGarminClient } from "./garmin/client.js";
 
 // Redirect console.log to stderr so libraries can't pollute stdout
 console.log = console.error;
@@ -19,10 +24,23 @@ async function runHttp(): Promise<void> {
     );
   }
 
+  const ownerToken = assertValidAuthToken(config.http.authToken);
+  const users = createUserRegistry({
+    stateDir: config.paths.stateDir,
+    owner: ownerContext(),
+    ownerToken,
+    onUserInvalidated: (user) => {
+      closeDb(user.dbPath);
+      resetGarminClient(user.id);
+    },
+  });
+  console.error(`Users: owner + ${readUsers(config.paths.stateDir).length} more (users.json)`);
+
   const running = await startHttpServer({
     host: config.http.host,
     port: config.http.port,
-    authToken: config.http.authToken,
+    authToken: ownerToken,
+    users,
     allowedHosts: config.http.allowedHosts,
     trustProxy: config.http.trustProxy,
     createMcpServer: createServer,

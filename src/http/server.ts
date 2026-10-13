@@ -6,16 +6,26 @@ import {
   FailedAuthLimiter,
   assertValidAuthToken,
   bearerTokenMatches,
+  extractBearerToken,
   isAllowedHost,
   isAllowedOrigin,
 } from "./security.js";
+import { ownerContext, runAsUser, type UserContext } from "../users/context.js";
+import type { UserRegistry } from "../users/registry.js";
+import { parseTokenBundle, writeTokenBundle } from "../garmin/token-store.js";
+import { resetGarminClient } from "../garmin/client.js";
 
 export const MCP_PATH = "/mcp";
 export const HEALTH_PATH = "/healthz";
+export const GARMIN_TOKENS_PATH = "/garmin-tokens";
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
+const MAX_TOKEN_UPLOAD_BYTES = 64 * 1024;
 
 export interface HttpHandlerOptions {
+  /** Owner token (MCP_AUTH_TOKEN). */
   authToken: string;
+  /** Owner plus additional users; without it only the owner token is accepted. */
+  users?: UserRegistry;
   /** Public hostnames (without port) accepted in Host/Origin besides loopback. */
   allowedHosts: string[];
   /** Use the first X-Forwarded-For entry as the client address (behind Caddy). */
@@ -56,13 +66,13 @@ function clientKey(req: IncomingMessage, trustProxy: boolean): string {
   return req.socket.remoteAddress ?? "unknown";
 }
 
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
+function readJsonBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         reject(new BodyTooLargeError("Request body too large"));
         req.destroy();
         return;
@@ -93,8 +103,8 @@ async function handleMcpPost(req: IncomingMessage, res: ServerResponse, createMc
     return;
   }
 
-  // Stateless mode: a fresh server and transport per request; the Garmin client and
-  // database stay shared module singletons.
+  // Stateless mode: a fresh server and transport per request. The caller's user context
+  // (set by runAsUser) selects their Garmin session and database inside the tool handlers.
   const server = createMcpServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -108,8 +118,37 @@ async function handleMcpPost(req: IncomingMessage, res: ServerResponse, createMc
   await transport.handleRequest(req, res, body);
 }
 
+async function handleTokenUpload(req: IncomingMessage, res: ServerResponse, user: UserContext): Promise<void> {
+  let body: unknown;
+  try {
+    body = await readJsonBody(req, MAX_TOKEN_UPLOAD_BYTES);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) sendJson(res, 413, { error: "Request body too large" });
+    else sendJson(res, 400, { error: "Body must be valid JSON" });
+    return;
+  }
+  let bundle;
+  try {
+    bundle = parseTokenBundle(body);
+  } catch (err) {
+    sendJson(res, 400, { error: (err as Error).message });
+    return;
+  }
+  writeTokenBundle(user.garminTokenDir, bundle);
+  resetGarminClient(user.id);
+  console.error(`Stored new Garmin session tokens for user "${user.id}".`);
+  sendJson(res, 200, { status: "ok", user: user.id });
+}
+
 export function createHttpRequestHandler(options: HttpHandlerOptions) {
   const authToken = assertValidAuthToken(options.authToken);
+  const authenticate = (header: string | undefined): UserContext | null => {
+    if (options.users) {
+      const token = extractBearerToken(header);
+      return token ? options.users.authenticate(token) : null;
+    }
+    return bearerTokenMatches(header, authToken) ? ownerContext() : null;
+  };
   const allowedHosts = options.allowedHosts.map((host) => host.toLowerCase());
   const limiter = options.limiter ?? new FailedAuthLimiter();
   const trustProxy = options.trustProxy ?? false;
@@ -127,7 +166,7 @@ export function createHttpRequestHandler(options: HttpHandlerOptions) {
         return;
       }
 
-      if (pathname !== MCP_PATH) {
+      if (pathname !== MCP_PATH && pathname !== GARMIN_TOKENS_PATH) {
         sendJson(res, 404, { error: "Not found" });
         return;
       }
@@ -146,7 +185,8 @@ export function createHttpRequestHandler(options: HttpHandlerOptions) {
         sendJsonRpcError(res, 429, "Too many failed authentication attempts", { "retry-after": "900" });
         return;
       }
-      if (!bearerTokenMatches(req.headers.authorization, authToken)) {
+      const user = authenticate(req.headers.authorization);
+      if (!user) {
         limiter.recordFailure(key);
         if (!res.headersSent) {
           res.writeHead(401, { "www-authenticate": 'Bearer realm="garmin-mcp"' });
@@ -156,8 +196,14 @@ export function createHttpRequestHandler(options: HttpHandlerOptions) {
       }
       limiter.reset(key);
 
+      if (pathname === GARMIN_TOKENS_PATH) {
+        if (req.method === "PUT") await handleTokenUpload(req, res, user);
+        else sendJson(res, 405, { error: "Method not allowed" }, { allow: "PUT" });
+        return;
+      }
+
       if (req.method === "POST") {
-        await handleMcpPost(req, res, options.createMcpServer);
+        await runAsUser(user, () => handleMcpPost(req, res, options.createMcpServer));
         return;
       }
       // Stateless server: no standalone SSE stream (GET) or sessions to delete.

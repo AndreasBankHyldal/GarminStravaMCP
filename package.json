@@ -14,7 +14,8 @@
     "start:http": "node dist/index.js --http",
     "dev": "npm run build:ui && tsx src/index.ts",
     "garmin-auth": "tsx src/garmin/auth-flow.ts",
-    "garmin-auth:dist": "node dist/garmin/auth-flow.js"
+    "garmin-auth:dist": "node dist/garmin/auth-flow.js",
+    "users": "node dist/users/cli.js"
   },
   "keywords": [],
   "author": "",

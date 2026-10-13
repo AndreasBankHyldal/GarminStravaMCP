@@ -1,23 +1,43 @@
 import Database from "better-sqlite3";
-import { config } from "../config.js";
+import { currentUser } from "../users/context.js";
 import fs from "node:fs";
 import path from "node:path";
 
-let db: Database.Database | null = null;
+const connections = new Map<string, Database.Database>();
 
+/** The SQLite database of the user making the current request (the owner in stdio mode). */
 export function getDb(): Database.Database {
-  if (db) return db;
+  const dbPath = currentUser().dbPath;
+  const existing = connections.get(dbPath);
+  if (existing) {
+    if (fs.existsSync(dbPath)) return existing;
+    // The file was deleted (e.g. `users remove --purge`): never keep writing to it.
+    closeDb(dbPath);
+  }
 
-  const dir = path.dirname(config.dbPath);
+  const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  db = new Database(config.dbPath);
+  const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   runMigrations(db);
+  connections.set(dbPath, db);
   return db;
+}
+
+/** Close a cached connection so the next getDb() reopens the file from disk. */
+export function closeDb(dbPath: string): void {
+  const db = connections.get(dbPath);
+  if (!db) return;
+  connections.delete(dbPath);
+  try {
+    db.close();
+  } catch {
+    // Already closed or file gone; dropping the handle is what matters.
+  }
 }
 
 function runMigrations(db: Database.Database): void {
