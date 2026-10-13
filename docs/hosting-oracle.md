@@ -195,43 +195,9 @@ to building an arm64 image in CI and pulling it on the VM.
 The endpoint is `https://your-name.duckdns.org/mcp`, with the header
 `Authorization: Bearer <MCP_AUTH_TOKEN>`. Never commit the token.
 
-**VS Code / GitHub Copilot** (`.vscode/mcp.json` or the user `mcp.json`):
-
-```json
-{
-  "inputs": [
-    { "type": "promptString", "id": "garmin-mcp-token", "description": "Garmin MCP token", "password": true }
-  ],
-  "servers": {
-    "garmin": {
-      "type": "http",
-      "url": "https://your-name.duckdns.org/mcp",
-      "headers": { "Authorization": "Bearer ${input:garmin-mcp-token}" }
-    }
-  }
-}
-```
-
-**Claude Code:**
-
-```bash
-claude mcp add --transport http garmin https://your-name.duckdns.org/mcp \
-  --header "Authorization: Bearer $GARMIN_MCP_TOKEN"
-```
-
-**Claude Desktop** and other stdio-only clients, through the `mcp-remote` bridge:
-
-```json
-{
-  "mcpServers": {
-    "garmin": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://your-name.duckdns.org/mcp", "--header", "Authorization:${GARMIN_MCP_AUTH}"],
-      "env": { "GARMIN_MCP_AUTH": "Bearer <MCP_AUTH_TOKEN>" }
-    }
-  }
-}
-```
+[connect-clients.md](connect-clients.md) has the setup for every computer: Claude Desktop (through
+`mcp-remote`), the GitHub Copilot desktop app and CLI, VS Code and Claude Code, plus
+troubleshooting. Client machines need no checkout, Garmin credentials or tokens.
 
 ### Smoke tests
 

@@ -218,7 +218,8 @@ unauthenticated `/healthz`. It binds `127.0.0.1:3000` unless `MCP_HOST` or
 an Always Free Oracle VM, Docker Compose with Caddy and a free DuckDNS hostname
 for HTTPS, token bootstrap (Garmin rate-limits fresh logins from datacenter
 IPs, so log in at home and copy the tokens), backups, auto-deploy, and client
-configuration. `npm run garmin-auth:dist` runs the login flow from a production
+configuration. [docs/connect-clients.md](docs/connect-clients.md) explains how to use
+the hosted server from any computer. `npm run garmin-auth:dist` runs the login flow from a production
 build without dev dependencies.
 
 ## Available tools
