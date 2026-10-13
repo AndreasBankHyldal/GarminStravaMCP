@@ -33,11 +33,20 @@ function requireId(id: string | undefined): string {
 }
 
 function printToken(id: string, token: string): void {
+  const host = process.env.MCP_PUBLIC_HOST?.trim();
+  const server = host ? `https://${host}` : "https://<your-server>";
   // stdout carries only what the admin has to hand over.
   console.log(`\nUser:  ${id}\nToken: ${token}\n`);
-  console.log("Share the token privately (e.g. a password manager share); it is not shown again.");
-  console.log("They connect with docs/connect-clients.md and upload their own Garmin session with:");
-  console.log("  npm run garmin-auth -- --upload https://<your-host>\n");
+  console.log("The token is not shown again. Send it privately (e.g. a password-manager share),");
+  console.log("separately from this message, which you can forward as is:\n");
+  console.log("----------------------------------------------------------------------------");
+  console.log("You've got access to the Garmin MCP server 🎉");
+  console.log(`  Server address: ${server}`);
+  console.log(`  Your user name: ${id}`);
+  console.log("  Your access token: sent to you separately - keep it private.");
+  console.log("Setup guide (about 10 minutes):");
+  console.log("  https://github.com/AndreasBankHyldal/GarminStravaMCP/blob/main/docs/getting-started.md");
+  console.log("----------------------------------------------------------------------------\n");
 }
 
 function add(id: string): void {
