@@ -247,6 +247,8 @@ build without dev dependencies.
 | `garmin_get_workouts` | Get Garmin workouts |
 | `garmin_add_running_workout` | Create a structured running workout |
 | `garmin_add_cycling_workout` | Create a structured cycling workout with power (W or % FTP), HR or cadence targets |
+| `garmin_get_calendar` | Read scheduled workouts, activities, and events from the Garmin calendar |
+| `garmin_edit_calendar` | Move a scheduled workout to another date or remove it from the calendar |
 | `garmin_schedule_workout` | Schedule a workout |
 | `garmin_delete_workout` | Delete a workout |
 
