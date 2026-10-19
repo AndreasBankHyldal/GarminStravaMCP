@@ -14,7 +14,7 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_PORT: "3000"
       GARMIN_STATE_DIR: /data
-      MCP_ALLOWED_HOSTS: ${MCP_PUBLIC_HOST:?Set MCP_PUBLIC_HOST in .env}
+      MCP_ALLOWED_HOSTS: ${MCP_PUBLIC_HOST:?Set MCP_PUBLIC_HOST in .env},${MCP_EXTRA_ALLOWED_HOSTS:-}
       # Caddy is the only client; use its X-Forwarded-For for failed-auth rate limiting.
       MCP_TRUST_PROXY: "true"
     volumes:
