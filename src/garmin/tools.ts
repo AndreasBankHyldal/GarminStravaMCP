@@ -548,6 +548,81 @@ Example interval workout steps:
   );
 
   server.tool(
+    "garmin_get_calendar",
+    "Read the Garmin Connect calendar: scheduled workouts, completed activities, races and events in a date range (max 92 days).",
+    {
+      start_date: z.string().optional().describe("Start date (ISO 8601). Defaults to today."),
+      end_date: z.string().optional().describe("End date (ISO 8601). Defaults to 14 days after start_date."),
+    },
+    async ({ start_date, end_date }) => {
+      try {
+        const start = start_date ? new Date(start_date) : new Date();
+        const end = end_date ? new Date(end_date) : new Date(start.getTime() + 14 * 86_400_000);
+        if (end.getTime() - start.getTime() > 92 * 86_400_000) {
+          throw new Error("Date range too large; request at most 92 days.");
+        }
+        const items = await garminClient.getCalendarItems(start, end);
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                start_date: start.toISOString().slice(0, 10),
+                end_date: end.toISOString().slice(0, 10),
+                count: items.length,
+                items,
+              }, null, 2),
+            },
+          ],
+        };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
+    "garmin_edit_calendar",
+    "Edit a scheduled workout on the Garmin calendar: move it to another date or remove it from the calendar. " +
+      "Use garmin_get_calendar first to get the scheduleId and workoutId. Removing keeps the workout template; " +
+      "use garmin_delete_workout to delete the template. Completed activities cannot be edited here.",
+    {
+      action: z.enum(["move", "remove"]).describe("move = reschedule to new_date; remove = unschedule"),
+      schedule_id: z.string().describe("scheduleId of the calendar entry (from garmin_get_calendar)"),
+      workout_id: z.string().optional().describe("workoutId of the entry (required for move)"),
+      new_date: z.string().optional().describe("New date YYYY-MM-DD (required for move)"),
+    },
+    async ({ action, schedule_id, workout_id, new_date }) => {
+      try {
+        let result: unknown;
+        if (action === "move") {
+          if (!workout_id || !new_date) {
+            throw new Error("workout_id and new_date are required for action 'move'.");
+          }
+          const moved = await garminClient.moveScheduledWorkout(schedule_id, workout_id, new_date);
+          result = {
+            success: moved.oldScheduleRemoved,
+            message: moved.warning ?? `Workout ${workout_id} moved to ${new_date}.`,
+            new_schedule: moved.newSchedule,
+          };
+        } else {
+          await garminClient.unscheduleWorkout(schedule_id);
+          result = { success: true, message: `Calendar entry ${schedule_id} removed.` };
+        }
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (err: any) {
+        return {
+          content: [{ type: "text", text: `Error: ${err.message}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  server.tool(
     "garmin_schedule_workout",
     "Schedule an existing Garmin workout for a specific date. The workout will appear on your calendar and sync to your watch.",
     {

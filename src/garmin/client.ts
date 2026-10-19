@@ -742,6 +742,106 @@ export async function scheduleWorkout(workoutId: string, date?: Date): Promise<a
   return withRetry(gc => gc.scheduleWorkout({ workoutId }, date));
 }
 
+export interface GarminCalendarItem {
+  id: number | null;
+  date: string;
+  itemType: string;
+  title: string | null;
+  workoutId: number | null;
+  scheduleId: number | null;
+  activityId: number | null;
+  sportTypeKey: string | null;
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+  trainingPlanId: number | null;
+  protected: boolean;
+}
+
+/** Garmin's calendar-service uses 0-based months (0 = January). */
+export async function getCalendarMonth(year: number, monthZeroBased: number): Promise<any> {
+  return withRetry(gc => gc.getCalendar(year, monthZeroBased));
+}
+
+export async function getCalendarItems(startDate: Date, endDate: Date): Promise<GarminCalendarItem[]> {
+  const start = toGarminDate(startDate);
+  const end = toGarminDate(endDate);
+  if (start > end) {
+    throw new Error("start_date must be on or before end_date.");
+  }
+
+  const items: GarminCalendarItem[] = [];
+  let year = startDate.getUTCFullYear();
+  let month = startDate.getUTCMonth();
+  const lastKey = endDate.getUTCFullYear() * 12 + endDate.getUTCMonth();
+
+  while (year * 12 + month <= lastKey) {
+    const data = await getCalendarMonth(year, month);
+    for (const raw of data?.calendarItems ?? []) {
+      const date = typeof raw.date === "string" ? raw.date.slice(0, 10) : null;
+      if (!date || date < start || date > end) continue;
+      items.push({
+        id: raw.id ?? null,
+        date,
+        itemType: raw.itemType ?? "unknown",
+        title: raw.title ?? null,
+        workoutId: raw.workoutId ?? null,
+        scheduleId: raw.itemType === "workout" ? raw.id ?? null : null,
+        activityId: raw.itemType === "activity" ? raw.id ?? null : null,
+        sportTypeKey: raw.sportTypeKey ?? null,
+        distanceMeters: raw.distance ?? null,
+        durationSeconds: raw.duration ?? null,
+        trainingPlanId: raw.trainingPlanId ?? null,
+        protected: Boolean(raw.protectedWorkoutSchedule),
+      });
+    }
+    month += 1;
+    if (month > 11) {
+      month = 0;
+      year += 1;
+    }
+  }
+
+  return items.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Removes one scheduled entry from the calendar; the workout template itself is kept. */
+export async function unscheduleWorkout(scheduleId: string): Promise<void> {
+  await withRetry(gc =>
+    gc.client.delete(`${gc.url.GC_API}/workout-service/schedule/${encodeURIComponent(scheduleId)}`)
+  );
+}
+
+/**
+ * Moves a scheduled workout by scheduling it on the new date first and only then
+ * removing the old entry, so a failure never leaves the workout off the calendar.
+ */
+export async function moveScheduledWorkout(
+  scheduleId: string,
+  workoutId: string,
+  newDate: string
+): Promise<{ newSchedule: any; oldScheduleRemoved: boolean; warning?: string }> {
+  if (!DATE_KEY.test(newDate) || Number.isNaN(new Date(newDate).getTime())) {
+    throw new Error("new_date must be a valid YYYY-MM-DD date.");
+  }
+  const newSchedule = await withRetry(gc =>
+    gc.post(`${gc.url.GC_API}/workout-service/schedule/${encodeURIComponent(workoutId)}`, {
+      date: newDate,
+    })
+  );
+  try {
+    await unscheduleWorkout(scheduleId);
+    return { newSchedule, oldScheduleRemoved: true };
+  } catch (err: any) {
+    return {
+      newSchedule,
+      oldScheduleRemoved: false,
+      warning: `Scheduled on ${newDate}, but removing the old entry failed: ${err.message}`,
+    };
+  }
+}
+
 export async function getTrainingStatus(date?: Date): Promise<any> {
   return withRetry(gc => gc.getTrainingStatus(date));
 }
