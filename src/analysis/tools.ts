@@ -3,7 +3,7 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
 import { getDb } from "../db/database.js";
 import * as garminClient from "../garmin/client.js";
-import { buildKilometreSplits } from "../garmin/splits.js";
+import { buildKilometreSplits, unavailableKilometreSplits, type KilometreSplits } from "../garmin/splits.js";
 import {
   formatGarminActivityDetails,
   hasGarminIntervalStructure,
@@ -58,7 +58,13 @@ export async function analyzeGarminRun(
     api.getActivityChart(activityId, 100_000),
   ]);
   const detail = formatGarminActivityDetails(activity, splits);
-  const kilometreSplits = buildKilometreSplits(chart, activity.summaryDTO.distance, hasGarminIntervalStructure(activity, splits.lapDTOs ?? []));
+  let kilometreSplits: KilometreSplits;
+  try {
+    kilometreSplits = buildKilometreSplits(chart, activity.summaryDTO.distance, hasGarminIntervalStructure(activity, splits.lapDTOs ?? []));
+  } catch (err: any) {
+    // A bad distance/time stream should not hide the rest of the run report.
+    kilometreSplits = unavailableKilometreSplits([`Kilometre splits unavailable: ${err.message}`]);
+  }
   const analysis: RunReportData = {
     source: "garmin",
     activity_id: activityId,
