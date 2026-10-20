@@ -130,6 +130,7 @@ function readSamples(chart: GarminActivityChart, warnings: string[]): Sample[] {
     for (const sample of samples) sample.moving = null;
     warnings.push("Moving time unavailable or incomplete; pace uses elapsed time and includes pauses.");
   }
+  let stalledDistance = 0;
   for (let i = 1; i < samples.length; i++) {
     const a = samples[i - 1], b = samples[i];
     if (a.elapsed !== null && b.elapsed !== null && a.moving !== null && b.moving !== null &&
@@ -137,10 +138,30 @@ function readSamples(chart: GarminActivityChart, warnings: string[]): Sample[] {
       throw new Error("Garmin moving time exceeds elapsed time between samples.");
     }
     if (b.distance > a.distance && a.moving !== null && b.moving === a.moving) {
-      throw new Error("Garmin distance advances without advancing moving time.");
+      stalledDistance += b.distance - a.distance;
+    }
+  }
+  if (stalledDistance > 0) {
+    // GPS drift while auto-paused adds distance without moving time; small amounts are harmless.
+    const tolerance = Math.max(MAX_STALLED_DISTANCE_METERS, samples.at(-1)!.distance * MAX_STALLED_DISTANCE_FRACTION);
+    if (stalledDistance <= tolerance || samples[0].elapsed === null) {
+      warnings.push(`${stalledDistance.toFixed(1)} m was recorded while Garmin's moving timer was paused (likely GPS drift); moving-time pace may be marginally fast.`);
+    } else {
+      for (const sample of samples) sample.moving = null;
+      warnings.push(`${stalledDistance.toFixed(1)} m was recorded while Garmin's moving timer was paused; moving time is unreliable, so pace uses elapsed time and includes pauses.`);
     }
   }
   return samples;
+}
+
+const MAX_STALLED_DISTANCE_METERS = 50;
+const MAX_STALLED_DISTANCE_FRACTION = 0.01;
+
+export function unavailableKilometreSplits(warnings: string[], sampleCount = 0): KilometreSplits {
+  return {
+    data_quality: { status: "unavailable", method: "distance_stream_interpolation", pace_time_basis: null, sample_count: sampleCount, max_sample_gap_seconds: null, warnings },
+    km_splits: [], pacing_summary: null,
+  };
 }
 
 function boundary(samples: Sample[], distance: number): { index: number; elapsed: number | null; moving: number | null; elevation: number | null } | null {
@@ -210,10 +231,7 @@ function rangeMetrics(samples: Sample[], start: number, end: number, basis: "mov
 export function buildKilometreSplits(chart: GarminActivityChart, distanceMeters: number, isInterval = false): KilometreSplits {
   const warnings: string[] = [];
   const samples = readSamples(chart, warnings);
-  const result: KilometreSplits = {
-    data_quality: { status: "unavailable", method: "distance_stream_interpolation", pace_time_basis: null, sample_count: samples.length, max_sample_gap_seconds: null, warnings },
-    km_splits: [], pacing_summary: null,
-  };
+  const result = unavailableKilometreSplits(warnings, samples.length);
   if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) throw new Error("Garmin activity has no positive distance to split.");
   if (!samples.length) return result;
   const firstSample = samples[0];

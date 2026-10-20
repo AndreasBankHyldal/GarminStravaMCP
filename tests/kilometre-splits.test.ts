@@ -234,9 +234,22 @@ test("rejects backwards samples, impossible clocks and invalid distance", () => 
     [[0, 0, 0], [1000, 300, 300], [2000, 200, 200]],
     [[0, 0, 0], [1000, 300, 400]],
     [[0, 0, 0], [1000, 0, 0]],
-    [[0, 0, 0], [1000, 300, 0]],
   ]) assert.throws(() => buildKilometreSplits(chart(rows), 2000), /Garmin/);
   for (const distance of [0, -1, Infinity, NaN]) assert.throws(() => buildKilometreSplits(stream, distance), /positive distance/);
+});
+
+test("tolerates GPS drift while the moving timer is paused", () => {
+  const drift = buildKilometreSplits(chart([
+    [0, 0, 0], [1000, 300, 300], [1020, 360, 300], [2000, 660, 600],
+  ]), 2000);
+  assert.equal(drift.data_quality.pace_time_basis, "moving");
+  assert.match(drift.data_quality.warnings.join(" "), /20\.0 m was recorded while Garmin's moving timer was paused \(likely GPS drift\)/);
+  assert.deepEqual(drift.km_splits.map(split => split.moving_time_seconds), [300, 300]);
+
+  const stalled = buildKilometreSplits(chart([[0, 0, 0], [1000, 300, 0], [2000, 600, 300]]), 2000);
+  assert.equal(stalled.data_quality.pace_time_basis, "elapsed");
+  assert.match(stalled.data_quality.warnings.join(" "), /pace uses elapsed time/);
+  assert.deepEqual(stalled.km_splits.map(split => split.elapsed_time_seconds), [300, 300]);
 });
 
 test("handles missing/duplicate required rows and rejects unsupported distance units without guessing", () => {
@@ -298,6 +311,14 @@ test("run analysis integrates km splits without relabelling interval laps; nativ
   });
   assert.equal(withoutStream.kilometre_splits?.data_quality.status, "unavailable");
   assert.equal(withoutStream.laps?.count, 3);
+  const corruptStream = await analyzeGarminRun(42, {
+    getActivityDetails: async () => activity, getActivitySplits: async () => laps,
+    getActivityChart: async () => chart([[0, 0, 0], [1000, 300, 300], [500, 400, 400]]),
+  });
+  assert.equal(corruptStream.kilometre_splits?.data_quality.status, "unavailable");
+  assert.match(corruptStream.kilometre_splits!.data_quality.warnings.join(" "), /go backwards/);
+  assert.equal(corruptStream.laps?.count, 3);
+  reportSchema.parse(runReport(corruptStream));
 });
 
 test("splits tool works over MCP, validates IDs, captures a dashboard and propagates failures", async () => {
