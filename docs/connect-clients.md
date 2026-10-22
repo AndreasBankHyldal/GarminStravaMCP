@@ -86,6 +86,8 @@ only through a trusted proxy that replaces `X-Forwarded-For`.
 3. In the server's login page, paste your **existing access token** from your password
    manager (the owner's `MCP_AUTH_TOKEN`, or your personal token from `users add`).
    Review the consent notice and approve. Never paste it into the Claude chat or a URL.
+   Submit within **5 minutes**, and keep the authorization page in the same browser
+   while retrieving the token. Paste only the token, without a `Bearer` prefix.
 4. The connector is then available in the Claude iPhone app when signed into the same
    Claude account. Enable it in the conversation if needed.
 5. Ask Claude to call **`whoami`**. It returns `userId` and `garminSessionPresent`.
@@ -129,6 +131,33 @@ and do not publish or commit it. Access tokens expire after 15 minutes. Refresh 
 rotate on every use and expire 30 days after login, when you must connect again.
 Treat all access tokens as passwords. Leave women's-health tools disabled over HTTP
 unless explicitly needed.
+
+### Troubleshooting Claude authorization
+
+If submission fails, read the response's `error_description`. The server also writes
+a token-free reason to the **app** service logs:
+
+```bash
+docker compose logs --since=10m app
+```
+
+The Caddy startup/certificate-renewal logs do not explain an OAuth consent rejection.
+Do not share `.env`, access tokens, cookies, or full authorization/callback URLs.
+
+| Reason | What to do |
+|---|---|
+| `session_expired` | Start a fresh connection from Claude and submit within 5 minutes. Pending forms also become invalid after an app restart/deployment or successful use. |
+| `cookie_missing` / `browser_mismatch` | Allow cookies and restart the connection in the same browser. Do not move an open consent form between Safari, a private window, and an in-app browser. |
+| `csrf_mismatch` / `invalid_form` / `invalid_request_body` | Start a fresh connection from Claude rather than reusing or editing an old authorization URL/form. |
+| `invalid_token` (`access_denied`, HTTP 401) | Go back and correct the MCP access token. It is not your Garmin password, Garmin session token, or an OAuth client secret. A failed submission does not consume an otherwise valid form. |
+| `invalid_origin` / `invalid_authorization_request` | Start from the connector in Claude. Check that the public issuer and callback configuration match the endpoint. |
+| `server_error` (HTTP 500) | Check the app service and its persistent state directory for storage/permission problems. This is a server failure, not a bad access token. |
+
+Opening another authorization page in the same browser no longer replaces the browser
+binding of an existing form. Each form still requires its own CSRF value and explicit
+consent, expires after 5 minutes, and can succeed only once. The consent page's form
+policy permits the selected trusted callback origin so browsers can follow the OAuth
+redirect back to Claude.
 
 ## 3. GitHub Copilot desktop app and Copilot CLI
 
