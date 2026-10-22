@@ -246,7 +246,7 @@ test("authorization requires login, explicit consent, browser cookie, CSRF and o
     const page = await f.login(client);
     assert.match(page.response.headers["content-security-policy"] as string, /frame-ancestors 'none'/);
     assert.equal(page.response.headers["cache-control"], "no-store");
-    assert.equal(page.response.headers["referrer-policy"], "no-referrer");
+    assert.equal(page.response.headers["referrer-policy"], "same-origin");
     assert.match(page.response.headers["set-cookie"]![0], /HttpOnly; Secure; SameSite=Lax/);
     assert.match(page.response.headers["set-cookie"]![0], /^__Host-garmin_oauth_browser=/);
     assert.match(page.response.headers["set-cookie"]![0], /; Path=\/; Max-Age=300$/);
@@ -265,6 +265,24 @@ test("authorization requires login, explicit consent, browser cookie, CSRF and o
   assert.equal(response.status, 302);
   assert.equal((await f.post("/authorize", page.fields, { cookie: page.cookie })).status, 400);
   assert.ok(!response.headers.location!.includes(OWNER_TOKEN));
+});
+
+test("consent preserves the browser's Origin while rejecting null and foreign origins", async (t) => {
+  const f = await fixture(t);
+  const client = await f.register();
+  const page = await f.login(client);
+  assert.equal(page.response.headers["referrer-policy"], "same-origin");
+  for (const origin of ["null", "https://claude.ai", "https://evil.example.org", "http://garmin.example.org"]) {
+    const rejected = await f.post("/authorize", page.fields, { cookie: page.cookie, origin });
+    assert.equal(rejected.status, 403);
+    assert.match(parsed(rejected).error_description, /must be submitted from this server/);
+    assert.equal(rejected.headers.location, undefined);
+  }
+  const approved = await f.post("/authorize", page.fields, { cookie: page.cookie, origin: ISSUER });
+  assert.equal(approved.status, 302, approved.text);
+  assert.equal(approved.headers["referrer-policy"], "no-referrer");
+  const code = new URL(approved.headers.location!).searchParams.get("code")!;
+  assert.equal((await f.exchange(client, code)).status, 200);
 });
 
 test("opening another consent page in the same browser does not invalidate an earlier form", async (t) => {

@@ -449,7 +449,8 @@ export function createOAuthProvider(
           res.writeHead(200, {
             "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
             "content-security-policy": `default-src 'none'; form-action 'self' ${new URL(auth.redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`,
-            "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "x-frame-options": "DENY",
+            // no-referrer makes browser form POSTs send Origin: null, failing the origin check.
+            "referrer-policy": "same-origin", "x-content-type-options": "nosniff", "x-frame-options": "DENY",
             "set-cookie": `${BROWSER_COOKIE}=${browser}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=300`,
           });
           res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Authorize MCP access</title></head><body><h1>Authorize MCP access</h1><p>Client: ${escapeHtml(auth.clientName)}</p><p>Allow this client to use your Garmin MCP account? Only continue if you initiated this connection.</p><p>Redirect: ${escapeHtml(auth.redirectUri)}</p><p>Submit within 5 minutes. Keep this page in the same browser while retrieving your token.</p><form method="post" action="/authorize"><input type="hidden" name="transaction" value="${transactionId}"><input type="hidden" name="csrf" value="${csrf}"><label>Your MCP access token <input type="password" name="token" required autocomplete="off"></label><label><input type="checkbox" name="consent" value="yes" required> I explicitly authorize this client to access my MCP account.</label><button type="submit">Authorize</button></form></body></html>`);
