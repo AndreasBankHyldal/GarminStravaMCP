@@ -124,8 +124,9 @@ Clients can also revoke their own issued tokens using `POST /revoke`.
 
 Discovery, registration, authorization, token and revocation endpoints are served at
 the issuer origin. Keep them accessible through the proxy, not just `/mcp`.
-OAuth state is stored privately under the configured state directory; keep it persistent
-and do not publish or commit it. Access tokens are short-lived and refresh tokens rotate.
+OAuth state is stored in `oauth.json` under the configured state directory; keep it persistent
+and do not publish or commit it. Access tokens expire after 15 minutes. Refresh tokens
+rotate on every use and expire 30 days after login, when you must connect again.
 Treat all access tokens as passwords. Leave women's-health tools disabled over HTTP
 unless explicitly needed.
 
