@@ -12,3 +12,7 @@ data/*.db-shm
 
 # Hosted Docker state (Garmin tokens, SQLite database)
 state/
+oauth.json
+oauth.json.*.tmp
+oauth.lock
+oauth.lock.*

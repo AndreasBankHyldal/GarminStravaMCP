@@ -121,6 +121,27 @@ test("registry invalidates removed, rotated and re-created users only", () => {
   assert.deepEqual(invalidated, ["alice", "bob", "alice"]);
 });
 
+test("OAuth grant resolution requires the same user and current credential hash", () => {
+  const stateDir = tempStateDir();
+  try {
+    seedUsers(stateDir);
+    const owner = ownerFor(stateDir);
+    const registry = createUserRegistry({ stateDir, owner, ownerToken: OWNER_TOKEN });
+    assert.equal(registry.resolveGrant("owner", hashToken(OWNER_TOKEN)), owner);
+    assert.deepEqual(registry.resolveGrant("alice", hashToken(ALICE_TOKEN)), registry.authenticate(ALICE_TOKEN));
+    assert.equal(registry.resolveGrant("bob", hashToken(ALICE_TOKEN)), null);
+    assert.equal(registry.resolveGrant("alice", "invalid"), null);
+    assert.equal(registry.resolveGrant("../alice", hashToken(ALICE_TOKEN)), null);
+    const users = readUsers(stateDir);
+    writeUsers(stateDir, [{ ...users[0], tokenSha256: hashToken(generateToken()) }, users[1]]);
+    assert.equal(registry.resolveGrant("alice", hashToken(ALICE_TOKEN)), null);
+    writeUsers(stateDir, []);
+    assert.equal(registry.resolveGrant("bob", hashToken(BOB_TOKEN)), null);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("user context follows async work started inside runAsUser", async () => {
   const alice = userContextFor("/state", "alice");
   const seen = await runAsUser(alice, async () => {
@@ -253,6 +274,21 @@ test("token upload stores the session for the authenticated user only", async ()
     assert.deepEqual(readTokenBundle(path.join(stateDir, "users", "alice", ".garmin-tokens")), sampleBundle);
     assert.ok(!fs.existsSync(path.join(stateDir, "users", "bob", ".garmin-tokens", "oauth1_token.json")));
     assert.ok(!fs.existsSync(path.join(stateDir, "owner", ".garmin-tokens", "oauth1_token.json")));
+  });
+});
+
+test("whoami reports only the caller's identity and saved Garmin session presence", async () => {
+  await withMultiUserServer(async ({ url }, stateDir) => {
+    const identity = async (token: string) => {
+      const result = await callTool(url, token, "whoami", {});
+      assert.equal(result.isError, false);
+      return JSON.parse(result.text);
+    };
+    assert.deepEqual(await identity(ALICE_TOKEN), { userId: "alice", garminSessionPresent: false });
+    writeTokenBundle(userContextFor(stateDir, "alice").garminTokenDir, sampleBundle);
+    assert.deepEqual(await identity(ALICE_TOKEN), { userId: "alice", garminSessionPresent: true });
+    assert.deepEqual(await identity(BOB_TOKEN), { userId: "bob", garminSessionPresent: false });
+    assert.deepEqual(await identity(OWNER_TOKEN), { userId: "owner", garminSessionPresent: false });
   });
 });
 

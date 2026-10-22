@@ -14,6 +14,8 @@ import { ownerContext, runAsUser, type UserContext } from "../users/context.js";
 import type { UserRegistry } from "../users/registry.js";
 import { parseTokenBundle, writeTokenBundle } from "../garmin/token-store.js";
 import { resetGarminClient } from "../garmin/client.js";
+import { createOAuthProvider, type OAuthOptions } from "./oauth.js";
+import { hashToken } from "../users/registry.js";
 
 export const MCP_PATH = "/mcp";
 export const HEALTH_PATH = "/healthz";
@@ -32,6 +34,8 @@ export interface HttpHandlerOptions {
   trustProxy?: boolean;
   createMcpServer: () => McpServer;
   limiter?: FailedAuthLimiter;
+  /** Enable OAuth for MCP while retaining static bearer authentication. */
+  oauth?: OAuthOptions;
 }
 
 export interface StartHttpServerOptions extends HttpHandlerOptions {
@@ -152,6 +156,13 @@ export function createHttpRequestHandler(options: HttpHandlerOptions) {
   const allowedHosts = options.allowedHosts.map((host) => host.toLowerCase());
   const limiter = options.limiter ?? new FailedAuthLimiter();
   const trustProxy = options.trustProxy ?? false;
+  const oauth = options.oauth ? createOAuthProvider(
+    options.oauth,
+    (token) => authenticate(["Bearer", token].join(" ")),
+    (userId, credentialHash) => options.users
+      ? options.users.resolveGrant(userId, credentialHash)
+      : userId === ownerContext().id && credentialHash === hashToken(authToken) ? ownerContext() : null,
+  ) : undefined;
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     try {
@@ -166,13 +177,17 @@ export function createHttpRequestHandler(options: HttpHandlerOptions) {
         return;
       }
 
-      if (pathname !== MCP_PATH && pathname !== GARMIN_TOKENS_PATH) {
+      if (pathname !== MCP_PATH && pathname !== GARMIN_TOKENS_PATH && !oauth?.handles(pathname)) {
         sendJson(res, 404, { error: "Not found" });
         return;
       }
 
       if (!isAllowedHost(req.headers.host, allowedHosts)) {
         sendJsonRpcError(res, 403, "Host not allowed");
+        return;
+      }
+      if (oauth?.handles(pathname)) {
+        await oauth.handle(req, res, clientKey(req, trustProxy));
         return;
       }
       if (!isAllowedOrigin(req.headers.origin, allowedHosts)) {
@@ -185,9 +200,15 @@ export function createHttpRequestHandler(options: HttpHandlerOptions) {
         sendJsonRpcError(res, 429, "Too many failed authentication attempts", { "retry-after": "900" });
         return;
       }
-      const user = authenticate(req.headers.authorization);
+      const user = authenticate(req.headers.authorization) ??
+        (pathname === MCP_PATH ? oauth?.authenticate(req.headers.authorization) : null);
       if (!user) {
         limiter.recordFailure(key);
+        if (pathname === MCP_PATH && oauth) {
+          res.writeHead(401, { "www-authenticate": oauth.challenge });
+          res.end();
+          return;
+        }
         if (!res.headersSent) {
           res.writeHead(401, { "www-authenticate": 'Bearer realm="garmin-mcp"' });
           res.end();
@@ -208,8 +229,8 @@ export function createHttpRequestHandler(options: HttpHandlerOptions) {
       }
       // Stateless server: no standalone SSE stream (GET) or sessions to delete.
       sendJsonRpcError(res, 405, "Method not allowed", { allow: "POST" });
-    } catch (err) {
-      console.error("HTTP request failed:", err);
+    } catch {
+      console.error("HTTP request failed");
       sendJsonRpcError(res, 500, "Internal server error");
     }
   };

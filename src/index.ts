@@ -43,6 +43,11 @@ async function runHttp(): Promise<void> {
     users,
     allowedHosts: config.http.allowedHosts,
     trustProxy: config.http.trustProxy,
+    oauth: config.http.oauthIssuerUrl ? {
+      issuerUrl: config.http.oauthIssuerUrl,
+      stateDir: config.paths.stateDir,
+      redirectUris: config.http.oauthRedirectUris,
+    } : undefined,
     createMcpServer: createServer,
   });
   console.error(`Garmin Connect MCP server listening on ${running.url}/mcp`);

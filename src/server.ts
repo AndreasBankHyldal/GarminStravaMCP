@@ -7,6 +7,8 @@ import { registerWomenTools } from "./women/tools.js";
 import { registerCyclingTools } from "./cycling/tools.js";
 import { config } from "./config.js";
 import { registerReportResource } from "./presentation/resource.js";
+import { currentUser } from "./users/context.js";
+import { readTokenBundle } from "./garmin/token-store.js";
 
 /** Build a fully configured MCP server. HTTP mode creates one per request. */
 export function createServer(): McpServer {
@@ -331,6 +333,28 @@ Do not claim that a menstrual phase causes better performance or injury risk.`,
   );
 
   // --- Register all tools ---
+
+  server.registerTool(
+    "whoami",
+    {
+      description: "Show the connected user id and whether a saved Garmin session is present (not a live validity check).",
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const user = currentUser();
+      let garminSessionPresent = false;
+      try {
+        readTokenBundle(user.garminTokenDir);
+        garminSessionPresent = true;
+      } catch {
+        // Missing or malformed session files are not a connected Garmin session.
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify({ userId: user.id, garminSessionPresent }) }],
+      };
+    }
+  );
 
   registerGarminTools(server);
   registerAnalysisTools(server);
