@@ -159,6 +159,11 @@ consent, expires after 5 minutes, and can succeed only once. The consent page's 
 policy permits the selected trusted callback origin so browsers can follow the OAuth
 redirect back to Claude.
 
+The consent HTML uses `Referrer-Policy: same-origin`: `no-referrer` makes browser form
+submissions send `Origin: null`, which the server correctly rejects. The callback
+redirect still uses `no-referrer` so authorization URLs are not shared with the client
+as referrers. Null and foreign origins remain blocked.
+
 ## 3. GitHub Copilot desktop app and Copilot CLI
 
 Both read `~/.copilot/mcp-config.json` (Windows: `%USERPROFILE%\.copilot\mcp-config.json`). Add,
