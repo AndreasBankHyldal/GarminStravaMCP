@@ -9,6 +9,7 @@ import path from "node:path";
 import { config } from "../config.js";
 import { isValidUserId, userContextFor } from "./context.js";
 import { generateToken, hashToken, readUsers, usersFilePath, writeUsers } from "./registry.js";
+import { revokeUserOAuthGrants } from "../http/oauth.js";
 
 const stateDir = config.paths.stateDir;
 
@@ -107,7 +108,13 @@ switch (command) {
   case "list":
     list();
     break;
+  case "revoke-oauth": {
+    const userId = id === "owner" ? id : requireId(id);
+    revokeUserOAuthGrants(stateDir, userId);
+    console.log(`Revoked OAuth grants for "${userId}". Existing static access tokens are unchanged.`);
+    break;
+  }
   default:
-    console.error("Usage: users <add|rotate|remove [--purge]|list> [id]");
+    console.error("Usage: users <add|rotate|remove [--purge]|revoke-oauth|list> [id]");
     process.exit(command ? 1 : 0);
 }

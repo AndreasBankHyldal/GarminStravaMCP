@@ -132,6 +132,11 @@ export const config = {
       .map((host) => host.trim().toLowerCase())
       .filter(Boolean),
     trustProxy: envFlag("MCP_TRUST_PROXY"),
+    oauthIssuerUrl: process.env.MCP_OAUTH_ISSUER_URL?.trim() || "",
+    oauthRedirectUris: (process.env.MCP_OAUTH_REDIRECT_URIS ?? "")
+      .split(",")
+      .map((uri) => uri.trim())
+      .filter(Boolean),
   },
   paths: {
     projectRoot,

@@ -62,6 +62,8 @@ function sameHash(a: string, b: string): boolean {
 export interface UserRegistry {
   /** Resolve a presented bearer token to its user, or null. */
   authenticate(token: string): UserContext | null;
+  /** Resolve an OAuth grant only while its original credential is still valid. */
+  resolveGrant(userId: string, credentialHash: string): UserContext | null;
 }
 
 /**
@@ -112,6 +114,15 @@ export function createUserRegistry(options: {
   }
 
   return {
+    resolveGrant(userId: string, credentialHash: string): UserContext | null {
+      if (!HASH_PATTERN.test(credentialHash)) return null;
+      const entries = users();
+      if (userId === options.owner.id && sameHash(credentialHash, ownerHash)) return options.owner;
+      const user = entries.find((entry) => entry.id === userId);
+      return user && sameHash(credentialHash, user.tokenSha256)
+        ? userContextFor(options.stateDir, user.id)
+        : null;
+    },
     authenticate(token: string): UserContext | null {
       if (!token) return null;
       const presented = hashToken(token);

@@ -64,6 +64,71 @@ Claude Desktop can't send a custom header itself, so it connects through the `mc
 The file now contains the token. On macOS, restrict it with
 `chmod 600 ~/Library/Application\ Support/Claude/claude_desktop_config.json`.
 
+## Claude (web & iPhone)
+
+The server must be reachable over **HTTPS**; your phone connects to the hosted server,
+not a local stdio process. Existing desktop bearer-token configurations still work.
+
+On the server, set these in `.env` and restart/recreate the HTTP service:
+
+```dotenv
+MCP_OAUTH_ISSUER_URL=https://your-name.duckdns.org
+MCP_ALLOWED_HOSTS=your-name.duckdns.org
+```
+
+With the supplied Docker Compose deployment, `MCP_PUBLIC_HOST` sets the allowed host;
+run `docker compose up -d` after updating `.env`. Keep the application port private
+behind the HTTPS reverse proxy. Set `MCP_TRUST_PROXY=true` only when requests can come
+only through a trusted proxy that replaces `X-Forwarded-For`.
+
+1. On **claude.ai**, open **Settings → Connectors → Add custom connector**.
+2. Name it `garmin` and enter `https://your-name.duckdns.org/mcp`.
+3. In the server's login page, paste your **existing access token** from your password
+   manager (the owner's `MCP_AUTH_TOKEN`, or your personal token from `users add`).
+   Review the consent notice and approve. Never paste it into the Claude chat or a URL.
+4. The connector is then available in the Claude iPhone app when signed into the same
+   Claude account. Enable it in the conversation if needed.
+5. Ask Claude to call **`whoami`**. It returns `userId` and `garminSessionPresent`.
+   This checks for saved session files, not whether Garmin still accepts them. Confirm
+   with “Show my last Garmin activity” and compare with Garmin Connect.
+
+The token determines which user's Garmin session and database the connector can use.
+The server address alone grants no access. Other users need their own tokens and get
+their own data. OAuth does not upload a Garmin session: follow
+[getting-started.md](getting-started.md) if your session is missing.
+
+### Revoking access (for example, a lost phone)
+
+Run on the server to revoke **all OAuth connections for that user**, without changing
+their static desktop token or deleting their Garmin data:
+
+```bash
+docker compose exec app node dist/users/cli.js revoke-oauth owner
+# Or replace owner with a personal user id:
+docker compose exec app node dist/users/cli.js revoke-oauth alice
+```
+
+For a non-Docker installation, use `npm run users -- revoke-oauth <id>` with the same
+state directory as the running server. Revocation takes effect without a restart;
+reconnecting requires logging in again. If the original access token was also exposed,
+rotate it (`users rotate <id>`, or change `MCP_AUTH_TOKEN` and restart for the owner).
+Rotating/removing a user's static credential invalidates their OAuth grants too.
+Clients can also revoke their own issued tokens using `POST /revoke`.
+
+### OAuth configuration
+
+| Variable | Meaning |
+|---|---|
+| `MCP_OAUTH_ISSUER_URL` | Public HTTPS origin, without `/mcp`, query, or fragment. Enables OAuth; unset keeps static-bearer-only mode. Plain HTTP is permitted only for loopback development. |
+| `MCP_OAUTH_REDIRECT_URIS` | Optional comma-separated **exact** additional trusted callback URLs. `https://claude.ai/api/mcp/auth_callback` is always allowed. No wildcards; HTTPS required except loopback HTTP. |
+
+Discovery, registration, authorization, token and revocation endpoints are served at
+the issuer origin. Keep them accessible through the proxy, not just `/mcp`.
+OAuth state is stored privately under the configured state directory; keep it persistent
+and do not publish or commit it. Access tokens are short-lived and refresh tokens rotate.
+Treat all access tokens as passwords. Leave women's-health tools disabled over HTTP
+unless explicitly needed.
+
 ## 3. GitHub Copilot desktop app and Copilot CLI
 
 Both read `~/.copilot/mcp-config.json` (Windows: `%USERPROFILE%\.copilot\mcp-config.json`). Add,
