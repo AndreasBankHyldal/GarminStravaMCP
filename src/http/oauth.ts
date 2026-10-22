@@ -65,6 +65,18 @@ const MAX_BODY = 16 * 1024;
 const MAX_CLIENTS = 10_000;
 const MAX_GRANTS = 10_000;
 const MAX_TRANSACTIONS = 10_000;
+const BROWSER_COOKIE = "__Host-garmin_oauth_browser";
+const AUTHORIZATION_ERRORS = {
+  invalid_origin: "The authorization form must be submitted from this server. Start a new connection from Claude.",
+  invalid_authorization_request: "The authorization request is invalid. Start a new connection from Claude.",
+  invalid_form: "The authorization form is invalid. Start a new connection from Claude.",
+  session_expired: "This authorization session expired, was already used, or the server restarted. Start a new connection from Claude and submit within 5 minutes.",
+  cookie_missing: "The browser session cookie is missing or invalid. Allow cookies and start a new connection from Claude in the same browser.",
+  browser_mismatch: "This form belongs to a different browser session. Start a new connection from Claude in the same browser.",
+  csrf_mismatch: "The authorization form could not be verified. Start a new connection from Claude.",
+  consent_required: "Explicit consent is required. Go back and select the authorization checkbox.",
+  invalid_token: "The MCP access token was not accepted. Go back and enter your existing MCP access token without a Bearer prefix.",
+} as const;
 const activeStoreLocks = new Set<string>();
 const random = () => randomBytes(32).toString("base64url");
 const has = (object: object, key: string) => Object.hasOwn(object, key);
@@ -209,36 +221,56 @@ function json(res: ServerResponse, status: number, body: unknown, cors = false):
   res.end(JSON.stringify(body));
 }
 
-function error(res: ServerResponse, status = 400, code = "invalid_request", cors = false): void {
-  json(res, status, { error: code }, cors);
+function error(res: ServerResponse, status = 400, code = "invalid_request", cors = false, description?: string): void {
+  json(res, status, { error: code, ...(description ? { error_description: description } : {}) }, cors);
+}
+
+function authorizationError(
+  res: ServerResponse,
+  reason: keyof typeof AUTHORIZATION_ERRORS,
+  status = 400,
+  code = "invalid_request",
+): void {
+  console.error(`OAuth /authorize rejected: ${reason}`);
+  error(res, status, code, false, AUTHORIZATION_ERRORS[reason]);
+}
+
+function browserCookie(req: IncomingMessage): string | undefined {
+  const cookies = (req.headers.cookie ?? "").split(";").map((entry) => entry.trim())
+    .filter((entry) => entry.startsWith(`${BROWSER_COOKIE}=`))
+    .map((entry) => entry.slice(BROWSER_COOKIE.length + 1));
+  return cookies.length === 1 && OPAQUE.test(cookies[0]) ? cookies[0] : undefined;
 }
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
 }
 
+class InvalidOAuthRequestError extends Error {}
+
 async function body(req: IncomingMessage, format: "json" | "form"): Promise<Record<string, unknown>> {
   const contentType = req.headers["content-type"]?.split(";")[0]?.trim().toLowerCase();
   if (contentType !== (format === "json" ? "application/json" : "application/x-www-form-urlencoded")) {
-    throw new Error("Invalid request");
+    throw new InvalidOAuthRequestError("Invalid request");
   }
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     size += Buffer.byteLength(chunk);
-    if (size > MAX_BODY) throw new Error("Invalid request");
+    if (size > MAX_BODY) throw new InvalidOAuthRequestError("Invalid request");
     chunks.push(Buffer.from(chunk));
   }
   const text = Buffer.concat(chunks).toString("utf8");
   if (format === "json") {
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Invalid request");
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { throw new InvalidOAuthRequestError("Invalid request"); }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new InvalidOAuthRequestError("Invalid request");
     return parsed as Record<string, unknown>;
   }
   const params = new URLSearchParams(text);
   const result: Record<string, unknown> = Object.create(null);
   for (const [key, value] of params) {
-    if (has(result, key)) throw new Error("Invalid request");
+    if (has(result, key)) throw new InvalidOAuthRequestError("Invalid request");
     result[key] = value;
   }
   return result;
@@ -341,7 +373,7 @@ export function createOAuthProvider(
         return true;
       }
       if (!cors && req.headers.origin && req.headers.origin !== issuer) {
-        error(res, 403);
+        authorizationError(res, "invalid_origin", 403);
         return true;
       }
       if (url.pathname !== "/authorize" && url.search) {
@@ -403,39 +435,46 @@ export function createOAuthProvider(
           if (transaction.expiresAt <= Date.now()) transactions.delete(id);
         }
         if (req.method === "GET") {
-          if ((req.url?.length ?? 0) > 8192) { error(res); return true; }
+          if ((req.url?.length ?? 0) > 8192) { authorizationError(res, "invalid_authorization_request"); return true; }
           const auth = authorization(url.searchParams);
-          if (!auth || transactions.size >= MAX_TRANSACTIONS) { error(res); return true; }
+          if (!auth) { authorizationError(res, "invalid_authorization_request"); return true; }
+          if (transactions.size >= MAX_TRANSACTIONS) throw new Error("OAuth transaction capacity reached");
           const transactionId = random();
           const csrf = random();
-          const browser = random();
+          // Reuse the browser binding so another tab or reload cannot invalidate an open form.
+          const browser = browserCookie(req) ?? random();
           transactions.set(hashToken(transactionId), {
             authorization: auth, browserHash: hashToken(browser), csrfHash: hashToken(csrf), expiresAt: Date.now() + CODE_LIFETIME,
           });
           res.writeHead(200, {
             "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
-            "content-security-policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+            "content-security-policy": `default-src 'none'; form-action 'self' ${new URL(auth.redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`,
             "referrer-policy": "no-referrer", "x-content-type-options": "nosniff", "x-frame-options": "DENY",
-            "set-cookie": `oauth_browser=${browser}; HttpOnly; Secure; SameSite=Lax; Path=/authorize; Max-Age=300`,
+            "set-cookie": `${BROWSER_COOKIE}=${browser}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=300`,
           });
-          res.end(`<!doctype html><html><head><meta charset="utf-8"><title>Authorize MCP access</title></head><body><h1>Authorize MCP access</h1><p>Client: ${escapeHtml(auth.clientName)}</p><p>Allow this client to use your Garmin MCP account? Only continue if you initiated this connection.</p><p>Redirect: ${escapeHtml(auth.redirectUri)}</p><form method="post" action="/authorize"><input type="hidden" name="transaction" value="${transactionId}"><input type="hidden" name="csrf" value="${csrf}"><label>Your MCP access token <input type="password" name="token" required autocomplete="off"></label><label><input type="checkbox" name="consent" value="yes" required> I explicitly authorize this client to access my MCP account.</label><button type="submit">Authorize</button></form></body></html>`);
+          res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Authorize MCP access</title></head><body><h1>Authorize MCP access</h1><p>Client: ${escapeHtml(auth.clientName)}</p><p>Allow this client to use your Garmin MCP account? Only continue if you initiated this connection.</p><p>Redirect: ${escapeHtml(auth.redirectUri)}</p><p>Submit within 5 minutes. Keep this page in the same browser while retrieving your token.</p><form method="post" action="/authorize"><input type="hidden" name="transaction" value="${transactionId}"><input type="hidden" name="csrf" value="${csrf}"><label>Your MCP access token <input type="password" name="token" required autocomplete="off"></label><label><input type="checkbox" name="consent" value="yes" required> I explicitly authorize this client to access my MCP account.</label><button type="submit">Authorize</button></form></body></html>`);
           return true;
         }
         if (req.method !== "POST") { error(res, 405); return true; }
-        if (url.search) { error(res); return true; }
+        if (url.search) { authorizationError(res, "invalid_form"); return true; }
         const input = await body(req, "form");
         if (!only(input, ["transaction", "csrf", "token", "consent"]) ||
-            typeof input.transaction !== "string" || !OPAQUE.test(input.transaction)) { error(res); return true; }
+            typeof input.transaction !== "string" || !OPAQUE.test(input.transaction) ||
+            typeof input.token !== "string" || input.token.length > 4096) {
+          authorizationError(res, "invalid_form"); return true;
+        }
         const id = hashToken(input.transaction);
         const transaction = transactions.get(id);
-        transactions.delete(id);
-        const cookie = req.headers.cookie?.split(";").map((entry) => entry.trim()).find((entry) => entry.startsWith("oauth_browser="))?.slice("oauth_browser=".length);
-        if (!transaction || transaction.expiresAt <= Date.now() || !cookie || !OPAQUE.test(cookie) ||
-            !equal(transaction.browserHash, hashToken(cookie)) || typeof input.csrf !== "string" ||
-            !equal(transaction.csrfHash, hashToken(input.csrf)) || input.consent !== "yes" ||
-            typeof input.token !== "string" || input.token.length > 4096) { error(res); return true; }
+        if (!transaction || transaction.expiresAt <= Date.now()) { authorizationError(res, "session_expired"); return true; }
+        const cookie = browserCookie(req);
+        if (!cookie) { authorizationError(res, "cookie_missing"); return true; }
+        if (!equal(transaction.browserHash, hashToken(cookie))) { authorizationError(res, "browser_mismatch"); return true; }
+        if (typeof input.csrf !== "string" || !equal(transaction.csrfHash, hashToken(input.csrf))) {
+          authorizationError(res, "csrf_mismatch"); return true;
+        }
+        if (input.consent !== "yes") { authorizationError(res, "consent_required"); return true; }
         const user = authenticateStatic(input.token);
-        if (!user) { error(res, 401, "access_denied"); return true; }
+        if (!user) { authorizationError(res, "invalid_token", 401, "access_denied"); return true; }
         const code = random();
         const auth = transaction.authorization;
         withIssuerState((store) => {
@@ -445,6 +484,7 @@ export function createOAuthProvider(
             redirectUri: auth.redirectUri, challenge: auth.challenge, family: random(), expiresAt: Date.now() + CODE_LIFETIME,
           };
         });
+        transactions.delete(id);
         const location = new URL(auth.redirectUri);
         location.searchParams.set("code", code);
         if (auth.state !== undefined) location.searchParams.set("state", auth.state);
@@ -515,9 +555,13 @@ export function createOAuthProvider(
       if (!result) error(res, 400, "invalid_grant", true);
       else json(res, 200, result, true);
       return true;
-    } catch {
+    } catch (err) {
       // Request bodies and credentials must never become log messages.
-      if (!res.headersSent) error(res, 400, "invalid_request", cors);
+      const invalidBody = err instanceof InvalidOAuthRequestError;
+      console.error(`OAuth ${url.pathname} failed: ${invalidBody ? "invalid_request_body" : "server_error"}`);
+      if (!res.headersSent) error(res, invalidBody ? 400 : 500, invalidBody ? "invalid_request" : "server_error", cors,
+        invalidBody ? "The OAuth request body is invalid. Start a new connection from Claude."
+          : "The authorization server could not complete the request. Check the app service logs and retry.");
       else res.end();
       return true;
     }

@@ -75,12 +75,12 @@ async function fixture(t: test.TestContext, registry = false, oauth = true, redi
     assert.equal(response.status, 201, response.text);
     return parsed(response).client_id as string;
   }
-  async function login(clientId: string, overrides: Record<string, string> = {}) {
+  async function login(clientId: string, overrides: Record<string, string> = {}, headers: Record<string, string> = {}) {
     const response = await req("/authorize?" + form({
       response_type: "code", client_id: clientId, redirect_uri: REDIRECT,
       code_challenge: CHALLENGE, code_challenge_method: "S256", resource: ISSUER + "/mcp",
       state: "browser-state", ...overrides,
-    }));
+    }), "GET", undefined, headers);
     assert.equal(response.status, 200, response.text);
     const transaction = /name="transaction" value="([^"]+)"/.exec(response.text)![1];
     const csrf = /name="csrf" value="([^"]+)"/.exec(response.text)![1];
@@ -211,6 +211,8 @@ test("registration ignores unknown RFC7591 metadata and retains Claude alongside
   const page = await f.login(parsed(response).client_id);
   assert.ok(page.response.text.includes("&lt;script&gt;"));
   assert.ok(!page.response.text.includes("<script>"));
+  assert.match(page.response.headers["content-security-policy"] as string, /form-action 'self' https:\/\/claude\.ai;/);
+  assert.ok(!(page.response.headers["content-security-policy"] as string).includes("https://client.example.org"));
 });
 
 test("removing an allowed callback blocks existing registrations and pending codes while Claude remains valid", async (t) => {
@@ -218,6 +220,7 @@ test("removing an allowed callback blocks existing registrations and pending cod
   const f = await fixture(t, false, true, [custom]);
   const client = await f.register([REDIRECT, custom]);
   const page = await f.login(client, { redirect_uri: custom });
+  assert.match(page.response.headers["content-security-policy"] as string, /form-action 'self' https:\/\/client\.example\.org;/);
   const approved = await f.post("/authorize", page.fields, { cookie: page.cookie });
   assert.equal(approved.status, 302);
   const code = new URL(approved.headers.location!).searchParams.get("code")!;
@@ -245,7 +248,9 @@ test("authorization requires login, explicit consent, browser cookie, CSRF and o
     assert.equal(page.response.headers["cache-control"], "no-store");
     assert.equal(page.response.headers["referrer-policy"], "no-referrer");
     assert.match(page.response.headers["set-cookie"]![0], /HttpOnly; Secure; SameSite=Lax/);
-    assert.match(page.response.headers["set-cookie"]![0], /; Secure/);
+    assert.match(page.response.headers["set-cookie"]![0], /^__Host-garmin_oauth_browser=/);
+    assert.match(page.response.headers["set-cookie"]![0], /; Path=\/; Max-Age=300$/);
+    assert.ok(!page.response.headers["set-cookie"]![0].includes("Domain="));
     const values = { ...page.fields };
     if (mode === "consent") values.consent = "no";
     if (mode === "csrf") values.csrf = "bad";
@@ -260,6 +265,114 @@ test("authorization requires login, explicit consent, browser cookie, CSRF and o
   assert.equal(response.status, 302);
   assert.equal((await f.post("/authorize", page.fields, { cookie: page.cookie })).status, 400);
   assert.ok(!response.headers.location!.includes(OWNER_TOKEN));
+});
+
+test("opening another consent page in the same browser does not invalidate an earlier form", async (t) => {
+  const f = await fixture(t);
+  const client = await f.register();
+  const first = await f.login(client, { state: "first-tab" });
+  const second = await f.login(client, { state: "second-tab" }, { cookie: first.cookie });
+  const firstApproval = await f.post("/authorize", first.fields, { cookie: second.cookie, origin: ISSUER });
+  assert.equal(firstApproval.status, 302, firstApproval.text);
+  assert.equal(new URL(firstApproval.headers.location!).searchParams.get("state"), "first-tab");
+  const secondApproval = await f.post("/authorize", second.fields, { cookie: second.cookie, origin: ISSUER });
+  assert.equal(secondApproval.status, 302, secondApproval.text);
+  assert.equal(new URL(secondApproval.headers.location!).searchParams.get("state"), "second-tab");
+  for (const approval of [firstApproval, secondApproval]) {
+    const exchanged = await f.exchange(client, new URL(approval.headers.location!).searchParams.get("code")!);
+    assert.equal(exchanged.status, 200, exchanged.text);
+    assert.equal((await f.mcp(parsed(exchanged).access_token)).status, 200);
+  }
+});
+
+test("failed token entry can be corrected without consuming the consent form", async (t) => {
+  const f = await fixture(t);
+  const client = await f.register();
+  const page = await f.login(client);
+  const denied = await f.post("/authorize", { ...page.fields, token: "wrong-token" }, { cookie: page.cookie });
+  assert.equal(denied.status, 401);
+  const approved = await f.post("/authorize", page.fields, { cookie: page.cookie });
+  assert.equal(approved.status, 302, approved.text);
+  assert.equal((await f.post("/authorize", page.fields, { cookie: page.cookie })).status, 400);
+});
+
+test("consent errors explain missing cookies, browser mismatch, CSRF and token failures without logging secrets", async (t) => {
+  const log = t.mock.method(console, "error", () => {});
+  const f = await fixture(t);
+  const client = await f.register();
+  const page = await f.login(client);
+  const otherBrowser = await f.login(client);
+  assert.notEqual(otherBrowser.cookie, page.cookie);
+  const cases = [
+    { fields: page.fields, headers: { cookie: "" }, reason: "cookie_missing", description: /cookie is missing/, status: 400 },
+    { fields: page.fields, headers: { cookie: otherBrowser.cookie }, reason: "browser_mismatch", description: /different browser session/, status: 400 },
+    { fields: page.fields, headers: { cookie: `${page.cookie}; ${page.cookie}` }, reason: "cookie_missing", description: /cookie is missing/, status: 400 },
+    { fields: { ...page.fields, csrf: "wrong-csrf" }, headers: { cookie: page.cookie }, reason: "csrf_mismatch", description: /could not be verified/, status: 400 },
+    { fields: { ...page.fields, consent: "no" }, headers: { cookie: page.cookie }, reason: "consent_required", description: /consent is required/, status: 400 },
+    { fields: { ...page.fields, token: "wrong-token" }, headers: { cookie: page.cookie }, reason: "invalid_token", description: /token was not accepted/, status: 401 },
+  ];
+  for (const entry of cases) {
+    const response = await f.post("/authorize", entry.fields, entry.headers);
+    assert.equal(response.status, entry.status, response.text);
+    assert.match(parsed(response).error_description, entry.description);
+    assert.equal(response.headers["cache-control"], "no-store");
+    assert.equal(response.headers.location, undefined);
+    assert.equal(log.mock.calls.at(-1)!.arguments[0], `OAuth /authorize rejected: ${entry.reason}`);
+  }
+  const logged = JSON.stringify(log.mock.calls.map((call) => call.arguments));
+  for (const secret of [OWNER_TOKEN, page.fields.transaction, page.fields.csrf, page.cookie, client, "wrong-token", "wrong-csrf"]) {
+    assert.ok(!logged.includes(secret), "authorization secret leaked into logs");
+  }
+  assert.equal((await f.post("/authorize", page.fields, { cookie: page.cookie })).status, 302);
+});
+
+test("expired or restarted consent sessions explain how to reconnect", async (t) => {
+  const f = await fixture(t);
+  const client = await f.register();
+  const expired = await f.login(client);
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  t.mock.timers.tick(5 * 60_000);
+  const expiredResponse = await f.post("/authorize", expired.fields, { cookie: expired.cookie });
+  assert.equal(expiredResponse.status, 400);
+  assert.match(parsed(expiredResponse).error_description, /session expired.*5 minutes/);
+  assert.equal(expiredResponse.headers.location, undefined);
+  const restarted = await f.login(client);
+  await f.restart();
+  const restartedResponse = await f.post("/authorize", restarted.fields, { cookie: restarted.cookie });
+  assert.equal(restartedResponse.status, 400);
+  assert.match(parsed(restartedResponse).error_description, /server restarted/);
+  assert.equal(restartedResponse.headers.location, undefined);
+  await f.grant(client);
+});
+
+test("malformed forms and storage failures have distinct safe diagnostics", async (t) => {
+  const log = t.mock.method(console, "error", () => {});
+  const f = await fixture(t);
+  const client = await f.register();
+  const page = await f.login(client);
+  const malformed = await f.req("/authorize", "POST", form(page.fields) + "&token=duplicate-secret", {
+    "content-type": "application/x-www-form-urlencoded", cookie: page.cookie,
+  });
+  assert.equal(malformed.status, 400);
+  assert.equal(parsed(malformed).error, "invalid_request");
+  assert.match(parsed(malformed).error_description, /request body is invalid/);
+  assert.equal(log.mock.calls.at(-1)!.arguments[0], "OAuth /authorize failed: invalid_request_body");
+  const file = path.join(f.stateDir, "oauth.json");
+  const before = fs.readFileSync(file, "utf8");
+  fs.writeFileSync(file, OWNER_TOKEN, { mode: 0o600 });
+  const failed = await f.post("/authorize", page.fields, { cookie: page.cookie });
+  assert.equal(failed.status, 500);
+  assert.equal(parsed(failed).error, "server_error");
+  assert.match(parsed(failed).error_description, /app service logs/);
+  assert.equal(failed.headers.location, undefined);
+  assert.equal(log.mock.calls.at(-1)!.arguments[0], "OAuth /authorize failed: server_error");
+  assert.ok(!failed.text.includes(OWNER_TOKEN));
+  const logged = JSON.stringify(log.mock.calls.map((call) => call.arguments));
+  for (const secret of [OWNER_TOKEN, page.fields.transaction, page.fields.csrf, "duplicate-secret"]) {
+    assert.ok(!logged.includes(secret), "request or storage contents leaked into logs");
+  }
+  fs.writeFileSync(file, before, { mode: 0o600 });
+  assert.equal((await f.post("/authorize", page.fields, { cookie: page.cookie })).status, 302);
 });
 
 test("authorization parameter validation never redirects untrusted input", async (t) => {
@@ -277,6 +390,7 @@ test("authorization parameter validation never redirects untrusted input", async
   ]) {
     const response = await f.req("/authorize?" + form({ ...base, ...changed }));
     assert.equal(response.status, 400);
+    assert.equal(parsed(response).error, "invalid_request");
     assert.equal(response.headers.location, undefined);
     assert.ok(!response.text.includes(OWNER_TOKEN));
   }
@@ -479,7 +593,8 @@ test("a live-process lock is never taken over", async (t) => {
   const response = await f.req("/register", "POST", JSON.stringify({ redirect_uris: [REDIRECT] }), {
     "content-type": "application/json",
   });
-  assert.equal(response.status, 400);
+  assert.equal(response.status, 500);
+  assert.equal(parsed(response).error, "server_error");
   assert.equal(fs.readFileSync(path.join(lock, "owner.json"), "utf8"), owner);
   assert.equal(fs.readFileSync(path.join(f.stateDir, "oauth.json"), "utf8"), before);
   fs.rmSync(lock, { recursive: true });
@@ -507,7 +622,7 @@ test("total persistent grants and clients are bounded", async (t) => {
     family: "capacity-test", expiresAt: Date.now() + 60_000 };
   for (let i = 0; i < 10_000; i++) store.access[hashToken(String(i))] = grant;
   fs.writeFileSync(file, JSON.stringify(store), { mode: 0o600 });
-  assert.equal((await f.post("/authorize", page.fields, { cookie: page.cookie })).status, 400);
+  assert.equal((await f.post("/authorize", page.fields, { cookie: page.cookie })).status, 500);
   assert.equal(Object.keys(JSON.parse(fs.readFileSync(file, "utf8")).codes).length, 0);
   store.access = {};
   for (let i = 0; i < 10_000; i++) {
@@ -517,7 +632,7 @@ test("total persistent grants and clients are bounded", async (t) => {
   const registration = await f.req("/register", "POST", JSON.stringify({ redirect_uris: [REDIRECT] }), {
     "content-type": "application/json",
   });
-  assert.equal(registration.status, 400);
+  assert.equal(registration.status, 500);
 });
 
 test("multi-user grants preserve identity, isolate revocation and invalidate on removal/rotation", async (t) => {
