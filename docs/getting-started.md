@@ -73,10 +73,12 @@ cd GarminStravaMCP
 ### 2b. Install the helper
 
 ```bash
-npm ci
+npm ci --ignore-scripts
+npm rebuild --ignore-scripts=false esbuild
 ```
 
-This takes a minute. Warnings in yellow are normal.
+This takes a minute. Only the reviewed esbuild installer is enabled; no Garmin
+credentials are needed during installation. Warnings in yellow are normal.
 
 ### 2c. Log in and upload
 

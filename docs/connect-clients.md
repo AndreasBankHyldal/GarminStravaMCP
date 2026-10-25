@@ -191,7 +191,9 @@ new computer:
 ```bash
 git clone https://github.com/AndreasBankHyldal/GarminStravaMCP.git
 cd GarminStravaMCP
-npm ci && npm run install:copilot
+npm ci --ignore-scripts
+npm rebuild --ignore-scripts=false esbuild
+npm run install:copilot
 ```
 
 This needs no `.env` or Garmin tokens. Rerun it after pulling changes to the dashboard.

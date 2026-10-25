@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { currentUser } from "../users/context.js";
 import fs from "node:fs";
 import path from "node:path";
+import { ensurePrivateFile } from "../private-files.js";
 
 const connections = new Map<string, Database.Database>();
 
@@ -17,12 +18,18 @@ export function getDb(): Database.Database {
 
   const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 
+  ensurePrivateFile(dbPath);
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  if (process.platform !== "win32") {
+    for (const file of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+      if (fs.existsSync(file)) fs.chmodSync(file, 0o600);
+    }
+  }
   runMigrations(db);
   connections.set(dbPath, db);
   return db;

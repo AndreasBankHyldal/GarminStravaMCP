@@ -20,8 +20,8 @@ import { hashToken } from "../users/registry.js";
 export const MCP_PATH = "/mcp";
 export const HEALTH_PATH = "/healthz";
 export const GARMIN_TOKENS_PATH = "/garmin-tokens";
-const MAX_BODY_BYTES = 4 * 1024 * 1024;
-const MAX_TOKEN_UPLOAD_BYTES = 64 * 1024;
+export const MAX_BODY_BYTES = 256 * 1024;
+export const MAX_TOKEN_UPLOAD_BYTES = 64 * 1024;
 
 export interface HttpHandlerOptions {
   /** Owner token (MCP_AUTH_TOKEN). */
@@ -74,16 +74,20 @@ function readJsonBody(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    let exceeded = false;
     req.on("data", (chunk: Buffer) => {
+      if (exceeded) return;
       size += chunk.length;
       if (size > maxBytes) {
+        exceeded = true;
+        chunks.length = 0;
         reject(new BodyTooLargeError("Request body too large"));
-        req.destroy();
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
+      if (exceeded) return;
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       } catch (err) {
@@ -100,7 +104,7 @@ async function handleMcpPost(req: IncomingMessage, res: ServerResponse, createMc
     body = await readJsonBody(req);
   } catch (err) {
     if (err instanceof BodyTooLargeError) {
-      sendJsonRpcError(res, 413, "Request body too large");
+      sendJsonRpcError(res, 413, "Request body too large", { connection: "close" });
     } else {
       sendJson(res, 400, { jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null });
     }
@@ -127,8 +131,11 @@ async function handleTokenUpload(req: IncomingMessage, res: ServerResponse, user
   try {
     body = await readJsonBody(req, MAX_TOKEN_UPLOAD_BYTES);
   } catch (err) {
-    if (err instanceof BodyTooLargeError) sendJson(res, 413, { error: "Request body too large" });
-    else sendJson(res, 400, { error: "Body must be valid JSON" });
+    if (err instanceof BodyTooLargeError) {
+      sendJson(res, 413, { error: "Request body too large" }, { connection: "close" });
+    } else {
+      sendJson(res, 400, { error: "Body must be valid JSON" });
+    }
     return;
   }
   let bundle;

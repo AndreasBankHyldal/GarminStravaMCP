@@ -4,6 +4,18 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 .env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+oauth1_token.json
+oauth2_token.json
+users.json
 # Keep archived OAuth credentials out of Git even though the integration is disabled.
 .strava-tokens.json
 .garmin-tokens/

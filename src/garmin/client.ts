@@ -2,6 +2,8 @@ import GarminConnectModule from "@gooin/garmin-connect";
 import { config } from "../config.js";
 import { currentUser, type UserContext } from "../users/context.js";
 import fs from "node:fs";
+import { parseTokenBundle, secureTokenFiles, writeTokenBundle } from "./token-store.js";
+import { ensurePrivateDirectory } from "../private-files.js";
 
 const GarminConnect = (GarminConnectModule as any).GarminConnect ?? GarminConnectModule;
 
@@ -119,14 +121,7 @@ async function tryLoadTokens(gc: any, user: UserContext): Promise<boolean> {
 }
 
 async function saveTokens(gc: any, user: UserContext): Promise<void> {
-  try {
-    if (!fs.existsSync(user.garminTokenDir)) {
-      fs.mkdirSync(user.garminTokenDir, { recursive: true, mode: 0o700 });
-    }
-    await gc.exportTokenToFile(user.garminTokenDir);
-  } catch {
-    // Non-critical — we'll just re-login next time
-  }
+  writeTokenBundle(user.garminTokenDir, parseTokenBundle(gc.exportToken()));
 }
 
 async function performLogin(gc: any, user: UserContext): Promise<void> {
@@ -177,6 +172,8 @@ export async function getGarminClient(user: UserContext = currentUser()): Promis
     );
   }
 
+  secureTokenFiles(user.garminTokenDir);
+  ensurePrivateDirectory(user.garminMfaDir);
   const gc = new GarminConnect({
     username: user.garminUsername || TOKEN_ONLY_PLACEHOLDER,
     password: user.garminPassword || TOKEN_ONLY_PLACEHOLDER,

@@ -67,7 +67,8 @@ This is the only step that needs your Garmin password, and it runs on **your** c
 ```bash
 git clone https://github.com/AndreasBankHyldal/GarminStravaMCP.git
 cd GarminStravaMCP
-npm ci
+npm ci --ignore-scripts
+npm rebuild --ignore-scripts=false esbuild
 ```
 
 Create a `.env` file in that folder:

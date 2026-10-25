@@ -15,14 +15,13 @@
  * The upload authenticates with your personal server token from GARMIN_MCP_TOKEN (or a prompt).
  */
 import GarminConnectModule from "@gooin/garmin-connect";
-import { MFAManager as MFAManagerImport } from "@gooin/garmin-connect";
 import { config } from "../config.js";
-import fs from "node:fs";
 import readline from "node:readline";
-import { readTokenBundle, tokenUploadUrl } from "./token-store.js";
+import { parseTokenBundle, readTokenBundle, tokenUploadUrl, writeTokenBundle } from "./token-store.js";
+import { loginWithInteractiveMfa } from "./mfa.js";
+import { ensurePrivateDirectory } from "../private-files.js";
 
 const GarminConnect = (GarminConnectModule as any).GarminConnect ?? GarminConnectModule;
-const MFAManager = (MFAManagerImport as any) ?? (GarminConnectModule as any).MFAManager;
 
 const TOKEN_DIR = config.paths.garminTokenDir;
 const MFA_DIR = config.paths.garminMfaDir;
@@ -114,7 +113,7 @@ async function main() {
   }
 
   // Explicit MFA session dir — the library defaults to /tmp, which doesn't exist on Windows.
-  fs.mkdirSync(MFA_DIR, { recursive: true });
+  ensurePrivateDirectory(MFA_DIR);
 
   console.log("\n⌚ Garmin Connect Setup (with MFA support)\n");
   console.log(`Logging in as ${username}...`);
@@ -126,50 +125,16 @@ async function main() {
     mfa: { type: "file", dir: MFA_DIR },
   });
 
-  const sessionId = `garmin-auth-${Date.now()}`;
-  let loginSettled = false;
-
-  // Kick off login. If MFA is required, this blocks until the code is submitted
-  // (or the library's 5-minute timeout elapses).
-  const loginPromise = gc
-    .login(username, password, sessionId)
-    .then(() => {
-      loginSettled = true;
-    })
-    .catch((err: any) => {
-      loginSettled = true;
-      throw err;
-    });
-
-  // Give the login flow a moment to reach the MFA challenge (and send the SMS).
-  await new Promise((r) => setTimeout(r, 2500));
-
-  if (!loginSettled) {
-    const code = await prompt(
-      "If Garmin sent you a verification code, type it here; otherwise just press Enter: "
-    );
-    if (code) {
-      const submitted = await MFAManager.getInstance().submitMFACode(sessionId, code);
-      if (!submitted) {
-        console.error(
-          "\n⚠️  Could not submit the MFA code (no waiting session found). " +
-          "The login may have already failed or timed out. Try again."
-        );
-      }
-    }
-  }
-
   try {
-    await loginPromise;
+    await loginWithInteractiveMfa(gc, username, password, () =>
+      promptHidden("Garmin verification code (hidden): ")
+    );
   } catch (err: any) {
     console.error(`\n❌ Garmin login failed: ${err?.message ?? err}`);
-    cleanup();
     process.exit(1);
   }
 
-  fs.mkdirSync(TOKEN_DIR, { recursive: true });
-  await gc.exportTokenToFile(TOKEN_DIR);
-  cleanup();
+  writeTokenBundle(TOKEN_DIR, parseTokenBundle(gc.exportToken()));
 
   console.log("\n✅ Garmin authentication successful! Tokens saved to .garmin-tokens/");
   console.log(`   Token location: ${TOKEN_DIR}`);
@@ -186,16 +151,7 @@ async function main() {
   process.exit(0);
 }
 
-function cleanup() {
-  try {
-    fs.rmSync(MFA_DIR, { recursive: true, force: true });
-  } catch {
-    // best effort
-  }
-}
-
 main().catch((err) => {
   console.error(err);
-  cleanup();
   process.exit(1);
 });

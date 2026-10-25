@@ -50,8 +50,8 @@ from the fetched history and flag that the first/current weeks can be partial.
 
 #### Other clients: MCP Apps
 
-Run `npm install` and `npm run build`, then restart/reconnect the MCP server in
-your client so it discovers the new tool metadata and
+Follow the dependency installation steps in [Setup](#setup), run `npm run build`,
+then restart/reconnect the MCP server in your client so it discovers the new tool metadata and
 `ui://garmin/fitness-report.html` resource. Ask for a run analysis, training trends,
 or heart-rate zones as usual. The client must support the MCP Apps extension
 (`io.modelcontextprotocol/ui`); a client that only supports standard MCP tools
@@ -68,7 +68,8 @@ create or modify Garmin workouts.
 Install the personal extension from this repository:
 
 ```bash
-npm install
+npm ci --ignore-scripts
+npm rebuild --ignore-scripts=false esbuild
 npm run install:copilot
 ```
 
@@ -136,10 +137,15 @@ research basis, setup, privacy model, limitations, and references.
 ## Setup
 
 ```bash
-npm install
+npm ci --ignore-scripts
+npm rebuild --ignore-scripts=false better-sqlite3 esbuild
 cp .env.example .env
 npm run build
 ```
+
+Install before adding credentials. Lifecycle hooks are disabled by default; the
+second command explicitly permits only the reviewed SQLite/esbuild native
+installers. Re-review these installers when updating their locked versions.
 
 Set the Garmin Connect credentials in `.env`:
 
@@ -173,7 +179,9 @@ npm run garmin-auth
 ```
 
 Garmin uses an unofficial API through `@gooin/garmin-connect`. Cached session
-tokens reduce repeated logins and MFA prompts.
+tokens reduce repeated logins and MFA prompts. The interactive helper asks for
+the code only when Garmin requests MFA, hides typed input, and keeps the code
+in memory instead of submitting it through the library's logging file store.
 
 ### State directory
 
@@ -472,7 +480,33 @@ reintroducing it:
 
 Never commit credentials, OAuth tokens, Garmin session files, MFA codes, raw
 reproductive-health responses, or live SQLite databases. The repository ignore
-rules cover current Garmin state and legacy archived token files.
+rules cover environment variants (except `.env.example`), SQLite files and
+sidecars, current Garmin state, and legacy archived token files.
+
+The lockfile is the installation source of truth: use `npm ci --ignore-scripts`,
+not an unrestricted install/update. CI and Docker enable only the reviewed
+`better-sqlite3` and `esbuild` native installers in the build stage, before runtime
+credentials are available. The Garmin package is pinned to reviewed `1.7.6`;
+do not replace it with `latest` without reviewing the published artifact, source
+provenance, logging and external endpoints.
+
+HTTP MCP requests are limited to **256 KiB** and **10,000 combined tool-argument
+array elements/object members** before schema validation. Token uploads retain
+their separate **64 KiB** limit. Oversized HTTP bodies return `413`; these limits
+also apply to authenticated users because they share one server process.
+
+On POSIX systems Garmin token directories use `0700`, and token/database files
+use `0600`, including existing files that are reused. Newly created database
+directories use `0700`; existing parent directories for a custom `DB_PATH` are
+not chmodded. On Windows, restrict the state directory with the account's ACLs.
+Garmin token JSON, the owner's optional `.env`, and the SQLite health database
+are **not encrypted at rest**: restrict OS access and protect backups. Other
+users' Garmin passwords are not stored; personal MCP and OAuth tokens are stored
+as hashes. Do not capture the admin CLI's one-time token output in shared logs.
+
+Run `npm audit --package-lock-only --ignore-scripts` when reviewing dependency
+changes. A matching integrity hash or clean advisory scan does not prove that a
+newly published package is free of malware.
 
 ## License
 
