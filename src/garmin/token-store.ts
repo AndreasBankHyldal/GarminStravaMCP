@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { ensurePrivateDirectory } from "../private-files.js";
 
 export const OAUTH1_FILE = "oauth1_token.json";
 export const OAUTH2_FILE = "oauth2_token.json";
@@ -35,20 +37,36 @@ export function parseTokenBundle(body: unknown): GarminTokenBundle {
 }
 
 export function readTokenBundle(dir: string): GarminTokenBundle {
+  secureTokenFiles(dir);
   return parseTokenBundle({
     oauth1: JSON.parse(fs.readFileSync(path.join(dir, OAUTH1_FILE), "utf8")),
     oauth2: JSON.parse(fs.readFileSync(path.join(dir, OAUTH2_FILE), "utf8")),
   });
 }
 
-/** Atomically replaces both token files, readable only by the server user. */
+export function secureTokenFiles(dir: string): void {
+  if (!fs.existsSync(dir)) return;
+  ensurePrivateDirectory(dir);
+  if (process.platform !== "win32") {
+    for (const name of [OAUTH1_FILE, OAUTH2_FILE]) {
+      const file = path.join(dir, name);
+      if (fs.existsSync(file)) fs.chmodSync(file, 0o600);
+    }
+  }
+}
+
+/** Replaces each token file atomically, readable only by the server user. */
 export function writeTokenBundle(dir: string, bundle: GarminTokenBundle): void {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensurePrivateDirectory(dir);
   for (const [name, data] of [[OAUTH1_FILE, bundle.oauth1], [OAUTH2_FILE, bundle.oauth2]] as const) {
     const target = path.join(dir, name);
-    const tmp = `${target}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600 });
-    fs.renameSync(tmp, target);
+    const tmp = `${target}.${randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600, flag: "wx" });
+      fs.renameSync(tmp, target);
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
   }
 }
 

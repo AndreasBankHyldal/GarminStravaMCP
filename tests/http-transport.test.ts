@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
+import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { createServer } from "../src/server.js";
+import { createServer, MAX_TOOL_INPUT_ELEMENTS } from "../src/server.js";
 import { FailedAuthLimiter } from "../src/http/security.js";
-import { createHttpRequestHandler, startHttpServer, type RunningHttpServer } from "../src/http/server.js";
+import { createHttpRequestHandler, MAX_BODY_BYTES, startHttpServer, type RunningHttpServer } from "../src/http/server.js";
 
 const TOKEN = "test-token-0123456789abcdef0123456789abcdef";
 
@@ -17,7 +18,7 @@ interface RawResponse {
 
 function request(
   url: string,
-  options: { method?: string; headers?: Record<string, string>; body?: string } = {}
+  options: { method?: string; headers?: Record<string, string>; body?: string; chunks?: string[] } = {}
 ): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const req = http.request(url, { method: options.method ?? "GET", headers: options.headers }, (res) => {
@@ -28,6 +29,7 @@ function request(
       );
     });
     req.on("error", reject);
+    for (const chunk of options.chunks ?? []) req.write(chunk);
     if (options.body) req.write(options.body);
     req.end();
   });
@@ -54,14 +56,15 @@ function mcpHeaders(extra: Record<string, string> = {}): Record<string, string> 
 
 async function withServer(
   run: (server: RunningHttpServer) => Promise<void>,
-  limiter = new FailedAuthLimiter()
+  limiter = new FailedAuthLimiter(),
+  createMcpServer = createServer,
 ): Promise<void> {
   const server = await startHttpServer({
     host: "127.0.0.1",
     port: 0,
     authToken: TOKEN,
     allowedHosts: ["garmin.example.org"],
-    createMcpServer: createServer,
+    createMcpServer,
     limiter,
   });
   try {
@@ -191,5 +194,60 @@ test("stateless endpoint rejects GET and malformed JSON", async () => {
     const malformed = await request(`${url}/mcp`, { method: "POST", headers: mcpHeaders(auth), body: "{" });
     assert.equal(malformed.status, 400);
     assert.equal(JSON.parse(malformed.body).error.code, -32700);
+  });
+});
+
+test("HTTP JSON body limit accepts exactly 256 KiB and rejects one byte more with a readable 413", async () => {
+  assert.equal(MAX_BODY_BYTES, 256 * 1024);
+  await withServer(async ({ url }) => {
+    const unicodeBody = initializeBody.replace("http-transport-test", "HTTP grænsetest");
+    const boundary = unicodeBody + " ".repeat(MAX_BODY_BYTES - Buffer.byteLength(unicodeBody));
+    assert.equal(Buffer.byteLength(boundary), MAX_BODY_BYTES);
+    const headers = mcpHeaders({ authorization: `Bearer ${TOKEN}` });
+    const accepted = await request(`${url}/mcp`, { method: "POST", headers, body: boundary });
+    assert.equal(accepted.status, 200, accepted.body);
+
+    const rejected = await request(`${url}/mcp`, {
+      method: "POST", headers, chunks: [boundary, " "],
+    });
+    assert.equal(rejected.status, 413);
+    assert.equal(rejected.headers.connection, "close");
+    assert.equal(JSON.parse(rejected.body).error.message, "Request body too large");
+    assert.equal((await request(`${url}/healthz`)).status, 200);
+  });
+});
+
+test("the real server enforces the tool element budget before schema validation", async () => {
+  assert.equal(MAX_TOOL_INPUT_ELEMENTS, 10_000);
+  await withServer(async ({ url }) => {
+    const client = new Client({ name: "input-budget-test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${url}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${TOKEN}` } },
+    }));
+    try {
+      // One object member plus 9,999 array entries is exactly the 10,000-element limit.
+      const accepted = await client.callTool({
+        name: "input_budget_test", arguments: { values: Array(MAX_TOOL_INPUT_ELEMENTS - 1).fill(0) },
+      });
+      assert.equal(Boolean(accepted.isError), false);
+      assert.deepEqual(accepted.content, [{ type: "text", text: "9999" }]);
+      const rejected = await client.callTool({
+        name: "input_budget_test", arguments: { values: Array(MAX_TOOL_INPUT_ELEMENTS).fill(0) },
+      });
+      assert.equal(rejected.isError, true);
+      assert.match(JSON.stringify(rejected.content), /maximum of 10000 elements/);
+      const invalid = await client.callTool({
+        name: "input_budget_test", arguments: { values: Array(MAX_TOOL_INPUT_ELEMENTS).fill({}) },
+      });
+      assert.equal(invalid.isError, true);
+      assert.match(JSON.stringify(invalid.content), /maximum of 10000 elements/);
+    } finally {
+      await client.close();
+    }
+  }, new FailedAuthLimiter(), () => {
+    const server = createServer();
+    server.registerTool("input_budget_test", { inputSchema: { values: z.array(z.number()) } },
+      async ({ values }) => ({ content: [{ type: "text", text: String(values.length) }] }));
+    return server;
   });
 });

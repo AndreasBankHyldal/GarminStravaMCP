@@ -6,12 +6,12 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createServer } from "../src/server.js";
-import { startHttpServer, type RunningHttpServer } from "../src/http/server.js";
+import { MAX_TOKEN_UPLOAD_BYTES, startHttpServer, type RunningHttpServer } from "../src/http/server.js";
 import { currentUser, isValidUserId, runAsUser, userContextFor, type UserContext } from "../src/users/context.js";
 import { createUserRegistry, generateToken, hashToken, readUsers, writeUsers } from "../src/users/registry.js";
 import { parseTokenBundle, readTokenBundle, tokenUploadUrl, writeTokenBundle } from "../src/garmin/token-store.js";
 import { closeDb } from "../src/db/database.js";
-import { resetGarminClient } from "../src/garmin/client.js";
+import { getGarminClient, resetGarminClient } from "../src/garmin/client.js";
 
 const OWNER_TOKEN = "owner-token-0123456789abcdef0123456789abcdef";
 const ALICE_TOKEN = generateToken();
@@ -166,6 +166,32 @@ test("token bundles are validated and written privately", () => {
   assert.equal(fs.statSync(path.join(dir, "oauth1_token.json")).mode & 0o777, 0o600);
 });
 
+test("loading cached Garmin tokens repairs legacy permissions without logging in", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const stateDir = tempStateDir();
+  const user = userContextFor(stateDir, "legacy");
+  t.after(() => {
+    resetGarminClient(user.id);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+  fs.mkdirSync(user.garminTokenDir, { recursive: true });
+  fs.chmodSync(user.garminTokenDir, 0o755);
+  for (const [file, data] of [
+    ["oauth1_token.json", sampleBundle.oauth1],
+    ["oauth2_token.json", sampleBundle.oauth2],
+  ] as const) {
+    fs.writeFileSync(path.join(user.garminTokenDir, file), JSON.stringify(data));
+    fs.chmodSync(path.join(user.garminTokenDir, file), 0o644);
+  }
+  const client = await getGarminClient(user);
+  assert.deepEqual(client.exportToken(), sampleBundle);
+  assert.equal(fs.statSync(user.garminTokenDir).mode & 0o777, 0o700);
+  for (const file of ["oauth1_token.json", "oauth2_token.json"]) {
+    assert.equal(fs.statSync(path.join(user.garminTokenDir, file)).mode & 0o777, 0o600);
+  }
+});
+
 test("upload URL accepts the server or /mcp URL and refuses plain HTTP", () => {
   for (const input of ["https://g.example.org", "https://g.example.org/", "https://g.example.org/mcp", "https://g.example.org/mcp/"]) {
     assert.equal(tokenUploadUrl(input), "https://g.example.org/garmin-tokens", input);
@@ -228,7 +254,14 @@ test("each user gets their own training database over HTTP", async () => {
       const other = await callTool(url, token, "get_training_plan", {});
       assert.doesNotMatch(other.text, /Alice 10K/);
     }
-    assert.ok(fs.existsSync(path.join(stateDir, "users", "alice", "data", "training.db")));
+    const database = path.join(stateDir, "users", "alice", "data", "training.db");
+    assert.ok(fs.existsSync(database));
+    if (process.platform !== "win32") {
+      assert.equal(fs.statSync(path.dirname(database)).mode & 0o777, 0o700);
+      for (const file of [database, `${database}-wal`, `${database}-shm`]) {
+        assert.equal(fs.statSync(file).mode & 0o777, 0o600, file);
+      }
+    }
   });
 });
 
@@ -274,6 +307,24 @@ test("token upload stores the session for the authenticated user only", async ()
     assert.deepEqual(readTokenBundle(path.join(stateDir, "users", "alice", ".garmin-tokens")), sampleBundle);
     assert.ok(!fs.existsSync(path.join(stateDir, "users", "bob", ".garmin-tokens", "oauth1_token.json")));
     assert.ok(!fs.existsSync(path.join(stateDir, "owner", ".garmin-tokens", "oauth1_token.json")));
+  });
+});
+
+test("token upload enforces its separate 64 KiB byte limit without replacing rejected tokens", async () => {
+  assert.equal(MAX_TOKEN_UPLOAD_BYTES, 64 * 1024);
+  await withMultiUserServer(async ({ url }, stateDir) => {
+    const json = JSON.stringify(sampleBundle);
+    const boundary = json + " ".repeat(MAX_TOKEN_UPLOAD_BYTES - Buffer.byteLength(json));
+    const upload = (body: string) => fetch(`${url}/garmin-tokens`, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${ALICE_TOKEN}`, "content-type": "application/json" },
+      body,
+    });
+    assert.equal((await upload(boundary)).status, 200);
+    const rejected = await upload(`${boundary} `);
+    assert.equal(rejected.status, 413);
+    assert.deepEqual(await rejected.json(), { error: "Request body too large" });
+    assert.deepEqual(readTokenBundle(userContextFor(stateDir, "alice").garminTokenDir), sampleBundle);
   });
 });
 

@@ -22,18 +22,18 @@
   "license": "ISC",
   "description": "MCP server for Garmin Connect training analysis and planning",
   "dependencies": {
-    "@gooin/garmin-connect": "^1.7.6",
+    "@gooin/garmin-connect": "1.7.6",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^17.4.2",
-    "zod": "^4.3.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.6.0",
     "esbuild": "^0.28.2",
-    "tsx": "^4.21.0",
+    "tsx": "4.23.15",
     "typescript": "^6.0.3"
   }
 }

@@ -8,12 +8,13 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci --ignore-scripts --no-audit --no-fund \
+  && npm rebuild --ignore-scripts=false better-sqlite3 esbuild
 COPY tsconfig.json ./
 COPY scripts ./scripts
 COPY src ./src
 # Server-only build: tsc + dashboard HTML (read at runtime). The Copilot extension isn't needed.
-RUN npm run build:server && npm prune --omit=dev
+RUN npm run build:server && npm prune --omit=dev --ignore-scripts
 
 FROM node:24-bookworm-slim
 ENV NODE_ENV=production \

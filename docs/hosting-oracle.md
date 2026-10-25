@@ -61,8 +61,17 @@ account, and the server already enforces a 60 s login cooldown.
 
 To verify Garmin access from the VM without Docker, install Node 24
 (`curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt install -y nodejs build-essential python3`),
-then in `~/GarminStravaMCP` create `.env` with your Garmin credentials, run
-`npm ci && npm run build:server`, and call one tool using the copied tokens:
+then in `~/GarminStravaMCP` run the following install/build steps and call one tool
+using the copied tokens.
+Install before creating `.env`; only the reviewed native installers are enabled:
+
+```bash
+npm ci --ignore-scripts
+npm rebuild --ignore-scripts=false better-sqlite3 esbuild
+npm run build:server
+```
+
+Only afterwards create `.env` if you need the owner's Garmin credentials.
 
 ```bash
 GARMIN_STATE_DIR=state npx @modelcontextprotocol/inspector --cli node dist/index.js \
@@ -227,6 +236,13 @@ To let other people use the server with **their own** Garmin data, see [multi-us
 - Host and Origin headers must be localhost or `MCP_ALLOWED_HOSTS`, as DNS-rebinding protection.
 - The server is stateless: each POST gets a fresh MCP server instance. GET and DELETE on `/mcp`
   return 405.
+- MCP JSON bodies are limited to 256 KiB and tool arguments to 10,000 combined array
+  elements/object members. Token uploads have a separate 64 KiB byte limit; excess bodies get `413`.
+- Token directories and newly created database directories are private (`0700`); token, database
+  and SQLite sidecar files use `0600` on POSIX. Data is not encrypted at rest; protect the host
+  account and backups. For a custom database location, existing parent-directory modes are preserved.
+- CI and the Docker builder install with lifecycle scripts disabled, then explicitly enable only
+  the reviewed SQLite/esbuild native installers. Build containers do not receive runtime `.env`.
 - Oracle can reclaim Always Free instances that stay idle for 7 days (CPU, network and memory
   under 20%). Upgrading the account to Pay As You Go keeps it free within the Always Free limits
   and avoids that.

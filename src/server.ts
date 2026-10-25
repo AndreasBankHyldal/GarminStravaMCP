@@ -10,6 +10,8 @@ import { registerReportResource } from "./presentation/resource.js";
 import { currentUser } from "./users/context.js";
 import { readTokenBundle } from "./garmin/token-store.js";
 
+export const MAX_TOOL_INPUT_ELEMENTS = 10_000;
+
 /** Build a fully configured MCP server. HTTP mode creates one per request. */
 export function createServer(): McpServer {
   const womenCapabilities = config.women.toolsEnabled
@@ -28,6 +30,7 @@ export function createServer(): McpServer {
   const server = new McpServer(
     { name: "garmin-connect-mcp", version: "1.0.0" },
     {
+      maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS,
       capabilities: {
         tools: {},
         resources: {},
